@@ -260,7 +260,7 @@ against `result:` and `failed:` prefixes still works.
 
 ## 8. Roadmap Connection
 
-The product contract phases align with the roadmap stages in [`ROADMAP.md`](../ROADMAP.md):
+The product contract phases align with the roadmap stages in [`ROADMAP.md`](roadmap.md):
 
 | Phase | Document section | Implementation bead | Status |
 |-------|-----------------|-------------------|--------|

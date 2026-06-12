@@ -12,6 +12,10 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
 - [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
 
+## Project Roadmap
+
+The [Roadmap](roadmap.md) sequences remaining work toward Hermes Agent upstream integration, from the product contract and result-sync idempotency through distribution (TestPyPI → PyPI → upstream skill PR).
+
 ## Release Gates
 
 The CI workflow verifies privacy scanning, Python tests, non-editable package install behavior, generated GitBook docs, and code doc coverage above 90%.

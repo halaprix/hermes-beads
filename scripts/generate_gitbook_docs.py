@@ -24,6 +24,7 @@ DOC_PAGES = [
     ("Project Dashboard", "dashboard.md"),
     ("PR Flow", "pr-flow.md"),
     ("Privacy", "privacy.md"),
+    ("Roadmap", "roadmap.md"),
 ]
 
 README = """# Hermes-Beads Documentation
@@ -39,6 +40,10 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Product Contract](product-contract.md) — authority model, mutation semantics, idempotency rules.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
 - [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
+
+## Project Roadmap
+
+The [Roadmap](roadmap.md) sequences remaining work toward Hermes Agent upstream integration, from the product contract and result-sync idempotency through distribution (TestPyPI → PyPI → upstream skill PR).
 
 ## Release Gates
 
@@ -64,10 +69,15 @@ def generated_files() -> dict[Path, str]:
 
 
 def check_required_pages() -> list[str]:
-    """Return missing source documentation pages referenced by GitBook SUMMARY.md."""
+    """Return missing source documentation pages referenced by GitBook SUMMARY.md.
+
+    Paths with '..' (e.g. '../ROADMAP.md') are intentionally outside DOCS_DIR and
+    are checked by resolving to an absolute path — they are not blindly skipped.
+    """
     missing = []
     for _title, filename in DOC_PAGES:
-        if not (DOCS_DIR / filename).exists():
+        path = (DOCS_DIR / filename).resolve()
+        if not path.exists():
             missing.append(filename)
     return missing
 

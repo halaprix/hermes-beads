@@ -195,7 +195,7 @@ hermes-beads follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.
 
 ## Roadmap Connection
 
-The distribution phases are defined in [`ROADMAP.md`](../ROADMAP.md) Phase 8. The sequencing
+The distribution phases are defined in [`ROADMAP.md`](roadmap.md) Phase 8. The sequencing
 constraints in this document are enforced by the roadmap ordering:
 
 - Phase 2 (v1.0.1 GitHub Release) ✓ done
