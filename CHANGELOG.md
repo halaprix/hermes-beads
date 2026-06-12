@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Compatibility matrix doc (`docs/beads-compatibility.md`) defining supported/unsupported Beads setup modes, minimum bd version, and the machine-readable bd output contract.
+- Automated compatibility smoke tests covering standard embedded, stealth embedded, and nested cwd modes.
+- Contract tests for fields hb consumes from `bd ready --json`, `bd show --json`, `bd comments --json`, and `bd context --json`.
+- Stderr-warning capture tests that fail if bd --json commands emit deprecation/removal notices.
+
 ### Changed
 
 ### Deprecated

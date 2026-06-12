@@ -16,6 +16,7 @@ DOC_PAGES = [
     ("Handoff Packet", "handoff-packet.md"),
     ("Kanban Bridge", "kanban-bridge.md"),
     ("Gate Resolver", "gate-resolver.md"),
+    ("Beads Compatibility", "beads-compatibility.md"),
     ("Cron Polling", "cron-polling.md"),
     ("Cross-Machine Sync", "cross-machine-sync.md"),
     ("Project Dashboard", "dashboard.md"),
@@ -34,10 +35,11 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Handoff Packet](handoff-packet.md) — JSON context shape passed between Beads and Hermes.
 - [Kanban Bridge](kanban-bridge.md) — bridge design and implemented dry-run commands.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
+- [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
 
 ## Release Gates
 
-The CI workflow verifies privacy scanning, Python tests, non-editable package install behavior, generated GitBook docs, and code doc coverage above 90%.
+The CI workflow verifies privacy scanning, Python tests, non-editable package install behavior, generated GitBook docs, and code doc coverage above 90%.\
 """
 
 

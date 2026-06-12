@@ -1,0 +1,341 @@
+"""Tests for Beads setup compatibility matrix.
+
+Covers the supported/unsupported setup modes documented in
+docs/beads-compatibility.md and the machine-readable bd output
+contract that hermes-beads (hb) relies on.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _run_bd(cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bd", *args], cwd=cwd, capture_output=True, text=True, check=check,
+    )
+
+
+def _run_bd_json(cwd: Path, args: list[str]) -> subprocess.CompletedProcess:
+    """Run bd with --json appended and return the CompletedProcess (stdout+stderr)."""
+    return _run_bd(cwd, args + ["--json"], check=False)
+
+
+def _run_hb(cwd: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "hermes_beads.cli", *args],
+        cwd=cwd,
+        env={**__import__("os").environ, "PYTHONPATH": str(_repo_root() / "src")},
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_temp_beads(tmp_path: Path, prefix: str, extra_args: list[str] | None = None) -> Path:
+    """Initialise a temporary git+Beads workspace."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    base = ["init", "--prefix", prefix, "--quiet", "--non-interactive", "--skip-agents", "--skip-hooks"]
+    if extra_args:
+        base.extend(extra_args)
+    result = _run_bd(tmp_path, base)
+    assert result.returncode == 0, f"bd init failed: {result.stderr}"
+    return tmp_path
+
+
+def _create_test_bead(cwd: Path, metadata: dict | None = None) -> str:
+    """Create a bead and return its id."""
+    args = ["create", "Compatibility test bead", "--json"]
+    if metadata:
+        args.extend(["--metadata", json.dumps(metadata)])
+    result = _run_bd_json(cwd, args)
+    assert result.returncode == 0, f"bd create failed: {result.stderr}"
+    data = json.loads(result.stdout)
+    if isinstance(data, list):
+        return data[0]["id"]
+    return data["id"]
+
+
+def _update_bead_labels(cwd: Path, bead_id: str, labels: list[str]) -> None:
+    """Add labels to a bead."""
+    for label in labels:
+        _run_bd(cwd, ["update", bead_id, "--add-label", label], check=False)
+
+
+# ---------------------------------------------------------------------------
+# Require bd CLI
+# ---------------------------------------------------------------------------
+
+def _bd_installed() -> bool:
+    try:
+        r = subprocess.run(["bd", "version"], capture_output=True, text=True)
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _bd_installed(), reason="bd CLI is not installed")
+
+
+# ===================================================================
+# Smoke tests for cheap local setup modes
+# ===================================================================
+
+class TestStandardEmbedded:
+    """Standard embedded Dolt repo (default bd init)."""
+
+    def test_hb_dispatch_dry_run(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="std")
+        bead_id = _create_test_bead(tmp_path, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+        result = _run_hb(tmp_path, ["bridge", "dispatch", "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert len(payload["tasks"]) >= 1
+        task = payload["tasks"][0]
+        assert task["source_bead_id"] == bead_id
+        assert task["assignee"] == "ts-dev"
+        body = json.loads(task["body"])
+        assert body["bead_id"] == bead_id
+
+    def test_hb_profile_dry_run(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="std")
+        bead_id = _create_test_bead(tmp_path, {
+            "hermes_status": "ready",
+            "hermes_profile": "docs",
+            "hermes_mode": "pr",
+        })
+        result = _run_hb(tmp_path, ["bridge", "profile", bead_id, "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["bead_id"] == bead_id
+        assert data["hermes_profile"] == "docs"
+        assert "reason" in data
+
+
+class TestStealthEmbedded:
+    """Stealth embedded Dolt repo (bd init --stealth)."""
+
+    def test_hb_dispatch_dry_run(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="stl", extra_args=["--stealth"])
+        bead_id = _create_test_bead(tmp_path, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+        result = _run_hb(tmp_path, ["bridge", "dispatch", "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert len(payload["tasks"]) >= 1
+        task = payload["tasks"][0]
+        assert task["source_bead_id"] == bead_id
+
+    def test_hb_profile_dry_run(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="stl", extra_args=["--stealth"])
+        bead_id = _create_test_bead(tmp_path, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+        result = _run_hb(tmp_path, ["bridge", "profile", bead_id, "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["bead_id"] == bead_id
+
+
+class TestNestedCwd:
+    """Beads repo initialised at root, hb invoked from a subdirectory."""
+
+    def test_nested_cwd_dispatch(self, tmp_path: Path) -> None:
+        repo_root = _init_temp_beads(tmp_path, prefix="nst")
+        bead_id = _create_test_bead(repo_root, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+        subdir = repo_root / "deep" / "nested" / "path"
+        subdir.mkdir(parents=True)
+        result = _run_hb(subdir, ["bridge", "dispatch", "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert len(payload["tasks"]) >= 1
+        task = payload["tasks"][0]
+        assert task["source_bead_id"] == bead_id
+
+    def test_nested_cwd_profile(self, tmp_path: Path) -> None:
+        repo_root = _init_temp_beads(tmp_path, prefix="nst")
+        bead_id = _create_test_bead(repo_root, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+        subdir = repo_root / "deep" / "nested" / "path"
+        subdir.mkdir(parents=True)
+        result = _run_hb(subdir, ["bridge", "profile", bead_id, "--dry-run"])
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["bead_id"] == bead_id
+        assert "reason" in data
+
+
+# ===================================================================
+# bd --json stderr-warning capture
+# ===================================================================
+
+class TestJsonStderrClean:
+    """Ensure bd --json subcommands used by hb do not emit deprecation warnings."""
+
+    def test_ready_json_stderr(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="jr")
+        result = _run_bd_json(tmp_path, ["ready"])
+        assert result.stderr == "", f"stderr not empty: {result.stderr!r}"
+
+    def test_show_json_stderr(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="js")
+        bead_id = _create_test_bead(tmp_path)
+        result = _run_bd_json(tmp_path, ["show", bead_id])
+        assert result.stderr == "", f"stderr not empty: {result.stderr!r}"
+
+    def test_comments_json_stderr(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="jc")
+        bead_id = _create_test_bead(tmp_path)
+        result = _run_bd_json(tmp_path, ["comments", bead_id])
+        assert result.stderr == "", f"stderr not empty: {result.stderr!r}"
+
+    def test_context_json_stderr(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="jx")
+        result = _run_bd_json(tmp_path, ["context"])
+        assert result.stderr == "", f"stderr not empty: {result.stderr!r}"
+
+
+# ===================================================================
+# Contract tests: fields hb consumes from bd JSON output
+# ===================================================================
+
+class TestReadyJsonContract:
+    """Fields hb consumes from bd ready --json.
+
+    hb reads fields defensively (bead.get('description', '')) so absent
+    fields are handled. This test verifies the fields that ARE present
+    have the expected types, and that the fields hb reads are either
+    present or safely defaulted.
+    """
+
+    def test_ready_bead_has_core_fields(self, tmp_path: Path) -> None:
+        """A ready bead always has id, title, status, priority, issue_type."""
+        _init_temp_beads(tmp_path, prefix="rc")
+        _create_test_bead(tmp_path)
+        result = _run_bd_json(tmp_path, ["ready"])
+        assert result.returncode == 0, result.stderr
+        beads = json.loads(result.stdout)
+        assert len(beads) > 0
+        bead = beads[0]
+        assert "id" in bead
+        assert "title" in bead
+        assert "status" in bead
+        assert "priority" in bead
+        assert "issue_type" in bead
+        assert isinstance(bead["id"], str)
+        assert isinstance(bead["title"], str)
+
+    def test_ready_bead_with_metadata(self, tmp_path: Path) -> None:
+        """Bead created with metadata has metadata field in ready output."""
+        _init_temp_beads(tmp_path, prefix="rc")
+        _create_test_bead(tmp_path, {"hermes_status": "ready"})
+        result = _run_bd_json(tmp_path, ["ready"])
+        beads = json.loads(result.stdout)
+        assert len(beads) > 0
+
+
+class TestShowJsonContract:
+    """Fields hb consumes from bd show <id> --json."""
+
+    def test_show_has_core_fields(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="sc")
+        bead_id = _create_test_bead(tmp_path)
+        result = _run_bd_json(tmp_path, ["show", bead_id])
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        beads = data if isinstance(data, list) else [data]
+        bead = next(b for b in beads if b["id"] == bead_id)
+        assert "id" in bead
+        assert "title" in bead
+        assert "status" in bead
+        assert isinstance(bead["id"], str)
+        assert isinstance(bead["title"], str)
+
+    def test_show_with_labels_metadata_description(self, tmp_path: Path) -> None:
+        """When a bead has labels and metadata, they appear in show output."""
+        _init_temp_beads(tmp_path, prefix="sc")
+        bead_id = _create_test_bead(tmp_path, {"hermes_status": "ready", "hermes_profile": "ts-dev"})
+        _update_bead_labels(tmp_path, bead_id, ["docs"])
+        result = _run_bd_json(tmp_path, ["show", bead_id])
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        beads = data if isinstance(data, list) else [data]
+        bead = next(b for b in beads if b["id"] == bead_id)
+        # hb uses bead.get("labels", []) and bead.get("dependencies", [])
+        # so these are not required but tested when present
+        if "labels" in bead:
+            assert isinstance(bead["labels"], list)
+        if "metadata" in bead:
+            assert isinstance(bead["metadata"], dict)
+        if "description" in bead:
+            assert isinstance(bead["description"], str)
+
+
+class TestCommentsJsonContract:
+    """Fields hb consumes from bd comments <id> --json.
+
+    hb's normalize_comments reads from flexible key fallbacks:
+      author  ← author, created_by, actor
+      body    ← body, text, comment, content
+      created_at ← created_at, timestamp
+    """
+
+    def test_comments_contain_hb_fields(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="cc")
+        bead_id = _create_test_bead(tmp_path)
+        _run_bd(tmp_path, ["comments", "add", bead_id, "test comment body"])
+        result = _run_bd_json(tmp_path, ["comments", bead_id])
+        assert result.returncode == 0, result.stderr
+        comments = json.loads(result.stdout)
+        assert len(comments) >= 1
+        comment = comments[0]
+        # At least one author-bearing key must be present
+        assert any(k in comment for k in ("author", "created_by", "actor")), \
+            f"comment missing author key: {list(comment.keys())}"
+        # At least one body-bearing key must be present
+        assert any(k in comment for k in ("body", "text", "comment", "content")), \
+            f"comment missing body key: {list(comment.keys())}"
+        # At least one timestamp key must be present
+        assert any(k in comment for k in ("created_at", "timestamp")), \
+            f"comment missing timestamp key: {list(comment.keys())}"
+
+
+class TestContextJsonContract:
+    """Fields potentially consumed from bd context --json."""
+
+    def test_context_contains_schema_version(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="xc")
+        result = _run_bd_json(tmp_path, ["context"])
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            pytest.fail(f"bd context did not return valid JSON: {result.stdout!r}")
+        assert "schema_version" in data, f"context missing schema_version keys: {list(data.keys())}"

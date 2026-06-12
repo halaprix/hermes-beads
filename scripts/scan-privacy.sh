@@ -38,8 +38,9 @@ fi
 
 # Patterns to detect
 patterns=(
-    # Private IPs
-    '192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.'
+    # Private IPv4 ranges. Require full dotted quads so timestamps like
+    # 19:06:10.358137Z do not match the 10/8 rule.
+    '(^|[^0-9])(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
     # Tokens and keys
     'github_pat_|ghp_|BEGIN .*PRIVATE KEY|----BEGIN.*PRIVATE KEY----'
     # Machine paths

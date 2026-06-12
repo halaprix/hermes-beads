@@ -9,6 +9,7 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Handoff Packet](handoff-packet.md) — JSON context shape passed between Beads and Hermes.
 - [Kanban Bridge](kanban-bridge.md) — bridge design and implemented dry-run commands.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
+- [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
 
 ## Release Gates
 

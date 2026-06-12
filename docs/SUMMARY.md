@@ -6,6 +6,7 @@
 * [Handoff Packet](handoff-packet.md)
 * [Kanban Bridge](kanban-bridge.md)
 * [Gate Resolver](gate-resolver.md)
+* [Beads Compatibility](beads-compatibility.md)
 * [Cron Polling](cron-polling.md)
 * [Cross-Machine Sync](cross-machine-sync.md)
 * [Project Dashboard](dashboard.md)
