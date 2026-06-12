@@ -1,0 +1,1 @@
+# hermes_beads - CLI for Hermes Beads task management
