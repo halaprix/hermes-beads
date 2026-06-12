@@ -23,9 +23,13 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### PR-Only After v0.1.0
 
-After the v0.1.0 bootstrap tag, every change to `main` must arrive through a pull request. Direct commits to `main` are prohibited except for:
-- Merging PR branches
+After the v0.1.0 bootstrap tag, every product/code/documentation change to `main` must arrive through a pull request. Direct commits to `main` are prohibited except for:
+- Merging or rebasing approved PR branches
 - Applying reviewed hotfixes
+- Maintainer-only mechanical release commits that update only `VERSION`, `CHANGELOG.md`, and tags
+- Task-graph-only orchestration commits that update `.beads/issues.jsonl` without changing product files
+
+When practical, keep one bead per PR. If several tightly coupled beads must share a PR, keep one commit per bead and explain the grouping in the PR body.
 
 ## PR Lifecycle
 
