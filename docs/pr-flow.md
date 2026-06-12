@@ -15,8 +15,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 1. Work on feature branches, commit cleanly to `main`
 2. When a coherent set of changes is ready, tag the current commit:
    ```bash
-   git tag -a v0.2.0 -m "v0.2.0: feature description"
-   git push origin v0.2.0
+   git tag -a v1.0.0 -m "v1.0.0: feature description"
+   git push origin v1.0.0
    ```
 3. Update `CHANGELOG.md` with the release date and contents
 4. Update `VERSION` file to match the new version
@@ -51,7 +51,9 @@ When practical, keep one bead per PR. If several tightly coupled beads must shar
 - [ ] PR template fully completed (description, testing notes, breaking changes)
 - [ ] All CI passes:
   - Privacy scan (no internal URLs, private IPs, or tokens)
-  - Lint checks
+  - Python test suite, including installed CLI and real Beads smoke tests
+  - GitBook docs generation check
+  - Code doc coverage threshold (`> 0.9`)
 - [ ] Required reviewers approved
 - [ ] No unresolved review comments
 

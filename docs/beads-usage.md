@@ -29,7 +29,7 @@ Provides durable project state that survives context compaction. When an agent d
 When transferring work between agents:
 
 1. Writer agent: runs `bd show <id>` to capture full task state
-2. Writer: adds a comment `bd comment <id> "handoff: [brief summary of what was done, blockers, next steps]"`
+2. Writer: adds a comment `bd comments add <id> "handoff: [brief summary of what was done, blockers, next steps]"`
 3. Reader agent: runs `bd dolt pull` then `bd prime` then `bd show <id>` to see full context
 4. Reader: claims the bead and continues
 

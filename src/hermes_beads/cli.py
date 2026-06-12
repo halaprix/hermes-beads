@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def get_version() -> str:
-    """Read version from VERSION file at repo root."""
-    return (REPO_ROOT / "VERSION").read_text().strip()
+    """Return the installed package version, with a source-tree fallback."""
+    version_file = REPO_ROOT / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+    try:
+        return version("hermes-beads")
+    except PackageNotFoundError:
+        return "0+unknown"
 
 
 def _json_env(name: str) -> Any | None:
@@ -143,12 +150,13 @@ def build_handoff_packet(bead: dict[str, Any]) -> dict[str, Any]:
     """Build a handoff packet from bead data."""
     metadata = bead.get("metadata", {}) or {}
     bead_id = str(bead.get("id", ""))
+    profile, _reason = explain_profile_selection(bead)
     return {
         "bead_id": bead_id,
         "goal": bead.get("title", ""),
         "description": bead.get("description", ""),
         "stop_condition": metadata.get("hermes_stop_condition", ""),
-        "hermes_profile": metadata.get("hermes_profile", ""),
+        "hermes_profile": profile,
         "hermes_mode": metadata.get("hermes_mode", ""),
         "dependencies": _dependency_summary(bead),
         "comments": get_comments(bead_id, bead),
@@ -158,17 +166,23 @@ def build_handoff_packet(bead: dict[str, Any]) -> dict[str, Any]:
 
 def select_profile(bead: dict[str, Any]) -> str:
     """Choose the Hermes profile for a bead without embedding policy in Beads."""
+    profile, _reason = explain_profile_selection(bead)
+    return profile
+
+
+def explain_profile_selection(bead: dict[str, Any]) -> tuple[str, str]:
+    """Choose a Hermes profile and explain the selected routing rule."""
     metadata = bead.get("metadata", {}) or {}
     explicit = metadata.get("hermes_profile")
     if explicit:
-        return str(explicit)
+        return str(explicit), "explicit metadata.hermes_profile"
 
     labels = set(bead.get("labels", []) or [])
     if "docs" in labels:
-        return "docs"
+        return "docs", "labels include docs"
     if "planning" in labels or "architecture" in labels:
-        return "planner"
-    return "ts-dev"
+        return "planner", "labels include planning or architecture"
+    return "ts-dev", "default profile"
 
 
 def build_kanban_payload(bead: dict[str, Any]) -> dict[str, Any]:
@@ -318,7 +332,8 @@ def bridge_profile(bead_id: str, dry_run: bool) -> None:
     if bead is None:
         click.echo(f"Error: bead '{bead_id}' not found", err=True)
         sys.exit(1)
-    click.echo(json.dumps({"bead_id": bead_id, "hermes_profile": select_profile(bead)}, indent=2))
+    profile, reason = explain_profile_selection(bead)
+    click.echo(json.dumps({"bead_id": bead_id, "hermes_profile": profile, "reason": reason}, indent=2))
 
 
 if __name__ == "__main__":

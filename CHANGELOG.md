@@ -19,6 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [1.0.0] - 2026-06-12
+
+### Added
+
+- GitBook-compatible docs generation via `scripts/generate_gitbook_docs.py`
+- CI checks for generated GitBook docs, non-editable package install, and code doc coverage above 90%
+- Deterministic AST-based doc coverage gate via `scripts/check_doc_coverage.py`
+
+### Changed
+
+- Promoted the public bridge contract to `1.0.0`
+- Handoff packets now use the same profile resolver as bridge dispatch when `metadata.hermes_profile` is absent
+
+### Fixed
+
+- Fixed installed CLI startup by loading version from package metadata instead of assuming a source-tree `VERSION` file exists
+- Aligned bridge documentation with implemented `bd comments add` result sync commands
+- Added profile-selection reasons to `hb bridge profile --dry-run` output
+
 ## [0.3.0] - 2026-06-12
 
 ### Added

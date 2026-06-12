@@ -15,7 +15,7 @@ def mock_repo_root(tmp_path: Path) -> Generator[Path, None, None]:
     """Set up a mock repo with proper directory structure."""
     src_dir = tmp_path / "src" / "hermes_beads"
     src_dir.mkdir(parents=True)
-    (tmp_path / "VERSION").write_text("0.2.0-test\n")
+    (tmp_path / "VERSION").write_text("1.0.0-test\n")
     (src_dir / "__init__.py").write_text("")
     cli_source = Path(__file__).parent.parent / "src" / "hermes_beads" / "cli.py"
     (src_dir / "cli.py").write_text(cli_source.read_text())
@@ -61,7 +61,7 @@ def bead(**overrides: object) -> dict:
 def test_version(mock_repo_root: Path) -> None:
     result = run_hb(["--version"], mock_repo_root)
     assert result.returncode == 0
-    assert "0.2.0-test" in result.stdout
+    assert "1.0.0-test" in result.stdout
 
 
 def test_ready_dry_run(mock_repo_root: Path) -> None:
@@ -174,7 +174,16 @@ def test_gate_profile_uses_explicit_profile(mock_repo_root: Path) -> None:
     env = {"HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id="hb-zjv")])}
     result = run_hb(["bridge", "profile", "hb-zjv", "--dry-run"], mock_repo_root, env=env)
     assert result.returncode == 0
-    assert json.loads(result.stdout)["hermes_profile"] == "ts-dev"
+    data = json.loads(result.stdout)
+    assert data["hermes_profile"] == "ts-dev"
+    assert data["reason"] == "explicit metadata.hermes_profile"
+
+
+def test_handoff_resolves_profile_when_metadata_is_absent(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id="hb-doc", metadata={}, labels=["docs"])])}
+    result = run_hb(["handoff", "hb-doc", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["hermes_profile"] == "docs"
 
 
 def test_gate_profile_defaults_for_docs_label(mock_repo_root: Path) -> None:

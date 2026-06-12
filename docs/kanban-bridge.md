@@ -15,7 +15,7 @@ Beads (source of truth)          Hermes Kanban (execution queue)
 ┌─────────────────────┐         ┌─────────────────────────┐
 │  bd ready --json    │──Bridge──│  hermes kanban create    │
 │  bd show <id>       │         │  hermes kanban show      │
-│  bd comment <id>     │         │  hermes kanban complete  │
+│  bd comments add <id>│         │  hermes kanban complete  │
 │  bd close <id>       │         └─────────────────────────┘
 └─────────────────────┘
 ```
@@ -47,7 +47,7 @@ Documented in `docs/cron-polling.md`. The cron loop should run dispatch and resu
 ### Beads Commands
 - `bd ready --json` — source of truth for available work
 - `bd show <id> --json` — construct handoff packet for a bead
-- `bd comment <id> "result: ..."` — write execution result back to Beads
+- `bd comments add <id> "result: ..."` — write execution result back to Beads
 - `bd close <id> --reason "..."` — close bead after execution
 
 ### Hermes Kanban CLI

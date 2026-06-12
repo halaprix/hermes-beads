@@ -45,7 +45,7 @@ open → in_progress → complete
 
 Transitions:
 - `open` → `in_progress`: agent runs `bd update <id> --claim`
-- `in_progress` → `blocked`: agent runs `bd comment <id> "blocked: <reason>"` then updates status
+- `in_progress` → `blocked`: agent runs `bd comments add <id> "blocked: <reason>"` then updates status
 - `blocked` → `in_progress`: blockers resolved, agent re-claims
 - `in_progress` → `complete`: agent runs `bd close <id> --reason "done"`
 - `in_progress` → `failed`: agent abandons or times out; iteration counter increments
@@ -79,7 +79,7 @@ And extracting:
 2. `title` — what to do
 3. `description` — why it exists and what needs to be done
 4. `metadata.hermes_stop_condition` — stop condition (if set)
-5. `metadata.hermes_profile` — which profile to use
+5. `metadata.hermes_profile` or resolver fallback — which profile to use
 6. `metadata.hermes_mode` — pr or manual
 7. Comments (via `bd comments <id> --json`) — decisions, blockers, handoff notes
 
@@ -132,4 +132,4 @@ And extracting:
 
 The schema version is implicit in the `VERSION` file at the repo root. Breaking changes increment the major version. Additive changes (new fields) increment the minor version and are backward-compatible.
 
-Current schema: `1.0` (matches VERSION `0.2.0`)
+Current schema: `1.0` (matches VERSION `1.0.0`)

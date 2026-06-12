@@ -56,7 +56,7 @@ git push
 If the worker cannot complete the task, it must add a comment instead of closing:
 
 ```bash
-bd comment <id> "blocked: <reason, next step, evidence>"
+bd comments add <id> "blocked: <reason, next step, evidence>"
 bd dolt push
 ```
 
