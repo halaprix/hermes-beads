@@ -42,17 +42,20 @@ class TestRunBd:
     """Text-output wrapper around bd subprocess calls."""
 
     def test_success(self) -> None:
-        with (
-            patch("shutil.which", return_value="/usr/bin/bd"),
-            patch("subprocess.run") as mock_run,
-        ):
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="bd 1.0.0\n", stderr="")
             result = run_bd(["version"])
             assert result == "bd 1.0.0\n"
 
-    def test_missing_bd_via_which(self) -> None:
-        with patch("shutil.which", return_value=None):
-            with pytest.raises(click.ClickException, match="bd command not found"):
+    def test_missing_bd_via_shell(self) -> None:
+        """When bd is absent, shell returns exit 127 with 'command not found'."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                127,
+                ["bd", "version"],
+                stderr="bd: command not found",
+            )
+            with pytest.raises(click.ClickException, match="bd: command not found"):
                 run_bd(["version"])
 
     def test_non_zero_exit(self) -> None:

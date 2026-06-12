@@ -7,6 +7,7 @@ with an actionable message and the subprocess stderr preserved.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from typing import Any
@@ -48,7 +49,6 @@ def run_bd(args: list[str]) -> str:
         non-zero status code, or ``FileNotFoundError`` is raised at
         invocation time (belt-and-suspenders guard).
     """
-    check_bd_available()
     try:
         result = subprocess.run(
             ["bd", *args],
@@ -62,7 +62,7 @@ def run_bd(args: list[str]) -> str:
         )
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.strip() if exc.stderr else ""
-        cmd = " ".join(args)
+        cmd = shlex.join(args)
         msg = f"bd {cmd} failed"
         if stderr:
             msg += f": {stderr}"
@@ -95,6 +95,6 @@ def run_bd_json(args: list[str]) -> Any:
     except json.JSONDecodeError as exc:
         snippet = (stdout[:200] + "...") if len(stdout or "") > 200 else (stdout or "<empty>")
         raise click.ClickException(
-            f"bd {' '.join(args)} returned invalid JSON: {exc}. "
+            f"bd {shlex.join(args)} returned invalid JSON: {exc}. "
             f"Output: {snippet}"
         )

@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from hermes_beads.bd_helpers import run_bd, run_bd_json
+from hermes_beads.bd_helpers import check_bd_available, run_bd, run_bd_json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -44,10 +44,7 @@ def get_bead_json(bead_id: str) -> dict[str, Any] | None:
     if mock_data is not None:
         beads = mock_data
     else:
-        try:
-            beads = run_bd_json(["show", bead_id, "--json"])
-        except click.ClickException:
-            return None
+        beads = run_bd_json(["show", bead_id, "--json"])
 
     if isinstance(beads, dict):
         beads = [beads]
@@ -62,10 +59,7 @@ def get_ready_beads() -> list[dict[str, Any]]:
     mock_data = _json_env("HB_MOCK_BD_READY_JSON")
     if mock_data is not None:
         return list(mock_data)
-    try:
-        data = run_bd_json(["ready", "--json"])
-    except click.ClickException:
-        return []
+    data = run_bd_json(["ready", "--json"])
     return list(data or [])
 
 
@@ -100,15 +94,17 @@ def get_comments(bead_id: str, bead: dict[str, Any] | None = None) -> list[dict[
     if mock_data is not None:
         return normalize_comments(mock_data)
 
+    # If any BD mock is set but HB_MOCK_BD_COMMENTS_JSON is not, we're in a
+    # test environment — skip the real bd call and return empty.
+    if _json_env("HB_MOCK_BD_SHOW_JSON") is not None or _json_env("HB_MOCK_BD_READY_JSON") is not None:
+        return []
+
     # Some bd show JSON versions may embed comments directly.
     embedded = normalize_comments((bead or {}).get("comments"))
     if embedded:
         return embedded
 
-    try:
-        return normalize_comments(run_bd_json(["comments", bead_id, "--json"]))
-    except click.ClickException:
-        return []
+    return normalize_comments(run_bd_json(["comments", bead_id, "--json"]))
 
 
 def _dependency_summary(bead: dict[str, Any]) -> list[dict[str, str]]:
@@ -239,6 +235,9 @@ def ready(dry_run: bool) -> None:
         click.echo("Error: only --dry-run mode is supported", err=True)
         sys.exit(1)
 
+    if _json_env("HB_MOCK_BD_READY_JSON") is None:
+        check_bd_available()
+
     ready_beads = get_ready_beads()
     if not ready_beads:
         click.echo("Error: no ready beads found", err=True)
@@ -255,6 +254,9 @@ def handoff(bead_id: str, dry_run: bool) -> None:
     if not dry_run:
         click.echo("Error: only --dry-run mode is supported", err=True)
         sys.exit(1)
+
+    if _json_env("HB_MOCK_BD_SHOW_JSON") is None and _json_env("HB_MOCK_BD_COMMENTS_JSON") is None:
+        check_bd_available()
 
     bead = get_bead_json(bead_id)
     if bead is None:
@@ -276,6 +278,8 @@ def bridge_dispatch(dry_run: bool) -> None:
     if not dry_run:
         click.echo("Error: live dispatch is not implemented; use --dry-run", err=True)
         sys.exit(1)
+    if _json_env("HB_MOCK_BD_READY_JSON") is None:
+        check_bd_available()
     tasks = [build_kanban_payload(bead) for bead in get_ready_beads()]
     click.echo(json.dumps({"tasks": tasks}, indent=2))
 
@@ -289,6 +293,8 @@ def bridge_sync_results(dry_run: bool, apply_ops: bool, results_file: str) -> No
     if dry_run == apply_ops:
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
+    if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
+        check_bd_available()
     results = json.loads(Path(results_file).read_text())
     if isinstance(results, dict):
         results = results.get("results", [])
@@ -306,6 +312,8 @@ def bridge_profile(bead_id: str, dry_run: bool) -> None:
     if not dry_run:
         click.echo("Error: live profile routing is not implemented; use --dry-run", err=True)
         sys.exit(1)
+    if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
+        check_bd_available()
     bead = get_bead_json(bead_id)
     if bead is None:
         click.echo(f"Error: bead '{bead_id}' not found", err=True)
