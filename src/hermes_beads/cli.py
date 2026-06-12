@@ -164,8 +164,7 @@ def select_profile(bead: dict[str, Any]) -> str:
         return str(explicit)
 
     labels = set(bead.get("labels", []) or [])
-    issue_type = bead.get("issue_type", "")
-    if "docs" in labels or issue_type == "task" and "architecture" in labels:
+    if "docs" in labels:
         return "docs"
     if "planning" in labels or "architecture" in labels:
         return "planner"
@@ -217,6 +216,21 @@ def build_result_sync_operations(results: list[dict[str, Any]]) -> list[dict[str
                 }
             )
     return operations
+
+
+def apply_result_sync_operations(operations: list[dict[str, Any]]) -> None:
+    """Apply result-sync operations to the local Beads workspace."""
+    for operation in operations:
+        bead_id = str(operation["bead_id"])
+        if operation["op"] == "comment":
+            run_bd_text(["comments", "add", bead_id, str(operation["body"])])
+        elif operation["op"] == "close":
+            run_bd_text(["close", bead_id, "--reason", str(operation["reason"])])
+        elif operation["op"] == "update-metadata":
+            args = ["update", bead_id]
+            for key, value in operation.get("metadata", {}).items():
+                args.extend(["--set-metadata", f"{key}={value}"])
+            run_bd_text(args)
 
 
 @click.group()
@@ -276,16 +290,20 @@ def bridge_dispatch(dry_run: bool) -> None:
 
 @bridge.command("sync-results")
 @click.option("--dry-run", is_flag=True, help="Print planned bd operations without side effects")
+@click.option("--apply", "apply_ops", is_flag=True, help="Apply bd operations to the current Beads workspace")
 @click.option("--results-file", type=click.Path(exists=True, dir_okay=False), required=True)
-def bridge_sync_results(dry_run: bool, results_file: str) -> None:
+def bridge_sync_results(dry_run: bool, apply_ops: bool, results_file: str) -> None:
     """Map Hermes Kanban results back to Beads operations."""
-    if not dry_run:
-        click.echo("Error: live result sync is not implemented; use --dry-run", err=True)
+    if dry_run == apply_ops:
+        click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
     results = json.loads(Path(results_file).read_text())
     if isinstance(results, dict):
         results = results.get("results", [])
-    click.echo(json.dumps({"operations": build_result_sync_operations(list(results))}, indent=2))
+    operations = build_result_sync_operations(list(results))
+    if apply_ops:
+        apply_result_sync_operations(operations)
+    click.echo(json.dumps({"operations": operations, "applied": apply_ops}, indent=2))
 
 
 @bridge.command("profile")
