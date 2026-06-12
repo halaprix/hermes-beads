@@ -2,6 +2,30 @@
 
 Thank you for your interest in contributing to hermes-beads.
 
+## Versioning and Tagging Policy
+
+This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+**Each release is a clean, tagged commit.** Commits on `main` between tags are development work — not releases. The tag marks the stable surface area at that point in time.
+
+### Release Protocol
+
+1. Work on feature branches, commit cleanly to `main`
+2. When a coherent set of changes is ready, tag the current commit:
+   ```bash
+   git tag -a v0.2.0 -m "v0.2.0: feature description"
+   git push origin v0.2.0
+   ```
+3. Update `CHANGELOG.md` with the release date and contents
+4. Update `VERSION` file to match the new version
+5. **After the initial v0.1.0 tag, all new features go through pull requests**
+
+### PR-Only After v0.1.0
+
+After the v0.1.0 bootstrap tag, every change to `main` must arrive through a pull request. Direct commits to `main` are prohibited except for:
+- Merging PR branches
+- Applying reviewed hotfixes
+
 ## Getting Started
 
 1. Clone the repository
