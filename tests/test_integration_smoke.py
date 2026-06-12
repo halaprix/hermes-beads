@@ -146,3 +146,53 @@ def test_sync_results_apply_idempotent_twice(tmp_path: Path) -> None:
     state3 = get_state()
     # After second apply, state must be unchanged from after first apply
     assert state2 == state3, f"State changed after re-apply: {state2!r} -> {state3!r}"
+
+
+def test_sync_results_failed_retry_idempotent(tmp_path: Path) -> None:
+    """Applying the same failed result twice increments iteration once only."""
+    repo_root = Path(__file__).resolve().parents[1]
+    if subprocess.run(["bd", "version"], capture_output=True).returncode != 0:
+        pytest.skip("bd CLI is not installed")
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    init = run_bd(tmp_path, ["init", "--prefix", "failidem", "--quiet"])
+    assert init.returncode == 0, init.stderr
+
+    created = run_bd(
+        tmp_path,
+        [
+            "create", "Failed retry test",
+            "--type", "task", "--priority", "1",
+            "--metadata", json.dumps({"hermes_profile": "ts-dev", "hermes_mode": "pr"}),
+            "--json",
+        ],
+    )
+    assert created.returncode == 0, created.stderr
+    bead_id = json.loads(created.stdout)["id"]
+
+    results_file = tmp_path / "results.json"
+    results_file.write_text(
+        json.dumps([
+            {
+                "source_bead_id": bead_id,
+                "status": "failed",
+                "summary": "timeout",
+                "dispatch_id": "task-fail-001",
+            }
+        ])
+    )
+
+    def get_iteration() -> int:
+        shown = run_bd(tmp_path, ["show", bead_id, "--json"])
+        bead = json.loads(shown.stdout)[0]
+        return int(bead.get("metadata", {}).get("hermes_iteration", 0) or 0)
+
+    sync1 = run_cli(repo_root, tmp_path, ["bridge", "sync-results", "--apply", "--results-file", str(results_file)])
+    assert sync1.returncode == 0, sync1.stderr
+    iter1 = get_iteration()
+    assert iter1 == 1, f"Expected iteration 1 after first apply, got {iter1}"
+
+    sync2 = run_cli(repo_root, tmp_path, ["bridge", "sync-results", "--apply", "--results-file", str(results_file)])
+    assert sync2.returncode == 0, sync2.stderr
+    iter2 = get_iteration()
+    assert iter2 == iter1, f"Iteration changed after re-apply: {iter1} -> {iter2}"

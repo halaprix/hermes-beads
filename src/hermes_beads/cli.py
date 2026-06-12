@@ -214,7 +214,8 @@ def build_result_sync_operations(
         status = result.get("status", "")
         summary = result.get("summary", "")
 
-        op_id = build_op_id(bead_id, dispatch_id, OpStatus.COMPLETED, summary)
+        op_status = OpStatus.COMPLETED if status in {"completed", "success", "done"} else OpStatus.FAILED
+        op_id = build_op_id(bead_id, dispatch_id, op_status, summary)
         seen_ids: set[str] = set()
         for comment in existing_comments.get(bead_id, []):
             marker = parse_op_marker(comment.get("body", ""))
@@ -231,7 +232,8 @@ def build_result_sync_operations(
             operations.append({"op": "close", "bead_id": bead_id, "reason": "kanban task completed"})
         elif status in {"failed", "timeout", "error"}:
             bead = get_bead_json(str(bead_id)) or {"id": bead_id, "metadata": {}}
-            operations.append({"op": "comment", "bead_id": bead_id, "body": f"failed: {summary}"})
+            comment_body = f"hermes-beads-op: {op_id}\nfailed: {summary}"
+            operations.append({"op": "comment", "bead_id": bead_id, "body": comment_body})
             operations.append(
                 {
                     "op": "update-metadata",

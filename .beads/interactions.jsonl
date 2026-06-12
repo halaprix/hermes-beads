@@ -15,3 +15,4 @@
 {"id":"int-c072bb92","kind":"field_change","created_at":"2026-06-12T21:59:35.260680525Z","actor":"halaprix","issue_id":"hb-b88.2","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-670db2cb","kind":"field_change","created_at":"2026-06-12T22:03:15.194402104Z","actor":"halaprix","issue_id":"hb-b88.3","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-dc360a10","kind":"field_change","created_at":"2026-06-12T22:16:23.278160001Z","actor":"halaprix","issue_id":"hb-b88.4","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-53e6f12b","kind":"field_change","created_at":"2026-06-12T22:19:25.842744853Z","actor":"halaprix","issue_id":"hb-b88.5","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
