@@ -36,6 +36,7 @@ Changelog = "https://github.com/halaprix/hermes-beads/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "build>=1.0",
 ]
 
 [project.scripts]

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automated compatibility smoke tests covering standard embedded, stealth embedded, and nested cwd modes.
 - Contract tests for fields hb consumes from `bd ready --json`, `bd show --json`, `bd comments --json`, and `bd context --json`.
 - Stderr-warning capture tests that fail if bd --json commands emit deprecation/removal notices.
+- Installed-package preflight test: builds a wheel from source, pip installs it in a temp venv, and verifies `hb --version` works.
+- bd-on-PATH auto-discovery preflight test: runs installed hb console script against a real Beads workspace, confirming bd is found from PATH.
 - Release matrix doc (`docs/release-matrix.md`) defining what artifacts ship where, sequencing constraints, versioning policy, and the pre-PyPI gate checklist for GitHub Release, TestPyPI, PyPI, and Hermes Agent upstream skill distribution.
 
 ### Changed

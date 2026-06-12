@@ -339,3 +339,47 @@ class TestContextJsonContract:
         except json.JSONDecodeError:
             pytest.fail(f"bd context did not return valid JSON: {result.stdout!r}")
         assert "schema_version" in data, f"context missing schema_version keys: {list(data.keys())}"
+
+
+# ===================================================================
+# bd-on-PATH auto-discovery preflight test
+# ===================================================================
+
+class TestBdOnPath:
+    """hb auto-discovers bd CLI from PATH when invoked as installed console script."""
+
+    def test_installed_hb_dispatch_dry_run(self, tmp_path: Path, built_wheel: Path) -> None:
+        """Installed hb (console script) invoking bd from PATH against a Beads workspace."""
+        repo_root = _repo_root()
+        venv_dir = tmp_path / "venv"
+
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+        subprocess.run(
+            [str(venv_dir / "bin" / "python"), "-m", "pip", "install", "-q", str(built_wheel)],
+            check=True,
+        )
+
+        # Create a separate Beads workspace
+        beads_dir = tmp_path / "beads_workspace"
+        beads_dir.mkdir(parents=True)
+        _init_temp_beads(beads_dir, prefix="ad")
+        bead_id = _create_test_bead(beads_dir, {
+            "hermes_status": "ready",
+            "hermes_profile": "ts-dev",
+            "hermes_mode": "pr",
+        })
+
+        # Run the installed hb console script against the Beads workspace
+        hb = str(venv_dir / "bin" / "hb")
+        result = subprocess.run(
+            [hb, "bridge", "dispatch", "--dry-run"],
+            cwd=beads_dir,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        payload = json.loads(result.stdout)
+        assert len(payload["tasks"]) >= 1
+        task = payload["tasks"][0]
+        assert task["source_bead_id"] == bead_id
+        assert task["assignee"] == "ts-dev"
