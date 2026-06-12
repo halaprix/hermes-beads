@@ -150,6 +150,8 @@ derive-only rule (no mutations, no stored dashboard state).
 ## Phase 8 — Distribution
 
 > Publish only after local product smoke passes twice (Phase 4 and Phase 5).
+> See [`docs/release-matrix.md`](docs/release-matrix.md) for the full release matrix,
+> sequencing constraints, versioning policy, and pre-PyPI gate checklist.
 
 Steps (sequenced):
 

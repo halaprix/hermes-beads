@@ -18,6 +18,7 @@ DOC_PAGES = [
     ("Product Contract", "product-contract.md"),
     ("Gate Resolver", "gate-resolver.md"),
     ("Beads Compatibility", "beads-compatibility.md"),
+    ("Release Matrix", "release-matrix.md"),
     ("Cron Polling", "cron-polling.md"),
     ("Cross-Machine Sync", "cross-machine-sync.md"),
     ("Project Dashboard", "dashboard.md"),
@@ -41,7 +42,9 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 
 ## Release Gates
 
-The CI workflow verifies privacy scanning, Python tests, non-editable package install behavior, generated GitBook docs, and code doc coverage above 90%.\
+The CI workflow verifies privacy scanning, Python tests, non-editable package install behavior, generated GitBook docs, and code doc coverage above 90%.
+
+See the [Release Matrix](release-matrix.md) for the full pre-PyPI gate checklist, sequencing constraints, and versioning policy.
 """
 
 

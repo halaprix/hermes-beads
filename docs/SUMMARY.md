@@ -8,6 +8,7 @@
 * [Product Contract](product-contract.md)
 * [Gate Resolver](gate-resolver.md)
 * [Beads Compatibility](beads-compatibility.md)
+* [Release Matrix](release-matrix.md)
 * [Cron Polling](cron-polling.md)
 * [Cross-Machine Sync](cross-machine-sync.md)
 * [Project Dashboard](dashboard.md)
