@@ -34,13 +34,13 @@ Beads (source of truth)          Hermes Kanban (execution queue)
 Bridge design and API surface. No live execution.
 
 ### Phase 2
-Write the bridge script that reads `bd ready --json` and creates kanban tasks.
+Implemented as `hb bridge dispatch --dry-run`. It reads `bd ready --json`, builds handoff packets, and prints the Hermes Kanban payloads it would create. Live dispatch remains guarded until the controller enables it explicitly.
 
 ### Phase 3
-Write the result-sync script that reads kanban task results and updates Beads.
+Implemented as `hb bridge sync-results --dry-run --results-file <file>`. It maps completed/failed Hermes Kanban result records back into Beads comment/close/metadata operations. Live mutation remains guarded until the controller enables it explicitly.
 
 ### Phase 4
-Wire to cron for continuous polling.
+Documented in `docs/cron-polling.md`. The cron loop should run dispatch and result-sync on a conservative schedule and stay silent when nothing changed.
 
 ## API Surface
 

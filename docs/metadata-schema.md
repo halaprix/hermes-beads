@@ -81,7 +81,11 @@ And extracting:
 4. `metadata.hermes_stop_condition` — stop condition (if set)
 5. `metadata.hermes_profile` — which profile to use
 6. `metadata.hermes_mode` — pr or manual
-7. Comments (via `bd comment list <id>`) — decisions, blockers, handoff notes
+7. Comments (via `bd comments <id> --json`) — decisions, blockers, handoff notes
+
+### Retry Iteration
+
+`metadata.hermes_iteration` starts at `0` or is absent for first attempts. When a bridge sync sees a failed or timed-out worker result, it prepares an update that increments the iteration by one and marks `hermes_status` as `failed`. The next dispatch can use that value to decide whether to retry, escalate, or ask for human review.
 
 ### Packet Shape (JSON)
 
