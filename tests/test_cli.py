@@ -317,3 +317,59 @@ def test_result_sync_dry_run_mixed_beads_one_skipped_one_new(mock_repo_root: Pat
     new_ops = [o for o in ops if o.get("bead_id") == bead_new]
     assert all(o.get("op") == "skipped" for o in old_ops)
     assert all(o.get("op") != "skipped" for o in new_ops)
+
+
+# -----------------------------------------------------------------------
+# hb-b88.7: malformed result records produce skipped diagnostics
+# -----------------------------------------------------------------------
+
+def test_result_sync_missing_bead_id_is_skipped(mock_repo_root: Path, tmp_path: Path) -> None:
+    """Result record without bead_id/source_bead_id produces skipped diagnostic."""
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([{"status": "completed", "summary": "orphan"}]))
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env={"HB_MOCK_BD_COMMENTS_JSON": "[]"},
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    # Should be marked as skipped with a reason
+    assert any(o.get("op") == "skipped" and "bead_id" in o.get("reason", "") for o in ops)
+
+
+def test_result_sync_unknown_status_is_skipped(mock_repo_root: Path, tmp_path: Path) -> None:
+    """Result with unknown status produces skipped diagnostic (no side effects)."""
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([
+        {"bead_id": "hb-xyz", "status": "unknown_status", "summary": "huh?"}
+    ]))
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env={"HB_MOCK_BD_COMMENTS_JSON": "[]"},
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    skipped = [o for o in ops if o.get("bead_id") == "hb-xyz"]
+    # Unknown status -> skipped (not comment, not close, not metadata update)
+    assert all(o.get("op") == "skipped" for o in skipped)
+
+
+def test_result_sync_valid_bead_still_processed(mock_repo_root: Path, tmp_path: Path) -> None:
+    """Valid record alongside malformed one is processed normally."""
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([
+        {"bead_id": "hb-bad", "status": "unknown_status", "summary": "bad"},
+        {"bead_id": "hb-good", "status": "completed", "summary": "ok"},
+    ]))
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env={"HB_MOCK_BD_COMMENTS_JSON": "[]"},
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    good_ops = [o for o in ops if o.get("bead_id") == "hb-good"]
+    assert any(o.get("op") == "comment" for o in good_ops)
+    assert any(o.get("op") == "close" for o in good_ops)

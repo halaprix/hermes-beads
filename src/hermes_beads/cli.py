@@ -209,6 +209,7 @@ def build_result_sync_operations(
     for result in results:
         bead_id = result.get("bead_id") or result.get("source_bead_id")
         if not bead_id:
+            operations.append({"op": "skipped", "bead_id": "", "reason": "missing bead_id in result record"})
             continue
         dispatch_id = result.get("dispatch_id", "unknown")
         status = result.get("status", "")
@@ -241,6 +242,8 @@ def build_result_sync_operations(
                     "metadata": {"hermes_status": "failed", "hermes_iteration": next_iteration(bead)},
                 }
             )
+        else:
+            operations.append({"op": "skipped", "bead_id": bead_id, "reason": f"unknown status: {status!r}"})
     return operations
 
 
