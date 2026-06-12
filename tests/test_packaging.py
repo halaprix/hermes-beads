@@ -32,4 +32,5 @@ def test_non_editable_install_exposes_working_cli(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "1.0.0" in result.stdout
+    expected_version = (repo_root / "VERSION").read_text().strip()
+    assert f"hb, version {expected_version}" in result.stdout

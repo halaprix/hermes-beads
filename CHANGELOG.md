@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [1.0.1] - 2026-06-12
+
+### Added
+
+- Root `README.md` for package indexes and first-run CLI guidance
+- PyPI package metadata: description, license, author, keywords, classifiers, and project URLs
+
+### Changed
+
+- Prepared release artifacts for package-index publication without moving the already-pushed `v1.0.0` tag
+
 ## [1.0.0] - 2026-06-12
 
 ### Added
