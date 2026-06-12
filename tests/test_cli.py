@@ -142,8 +142,7 @@ def test_result_sync_success_operations(mock_repo_root: Path, tmp_path: Path) ->
         mock_repo_root,
     )
     assert result.returncode == 0
-    operations = json.loads(result.stdout)["operations"]
-    assert operations == [
+    assert json.loads(result.stdout)["operations"] == [
         {"op": "comment", "bead_id": "hb-xaz", "body": "result: ok"},
         {"op": "close", "bead_id": "hb-xaz", "reason": "kanban task completed"},
     ]
@@ -187,3 +186,14 @@ def test_gate_profile_defaults_for_docs_label(mock_repo_root: Path) -> None:
     result = run_hb(["bridge", "profile", "hb-a6n", "--dry-run"], mock_repo_root, env=env)
     assert result.returncode == 0
     assert json.loads(result.stdout)["hermes_profile"] == "docs"
+
+
+def test_gate_profile_defaults_architecture_to_planner(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps(
+            [bead(id="hb-a6n", metadata={}, labels=["architecture"])]
+        )
+    }
+    result = run_hb(["bridge", "profile", "hb-a6n", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["hermes_profile"] == "planner"

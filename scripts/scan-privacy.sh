@@ -3,12 +3,34 @@
 
 set -e
 
-# Get staged files from args or auto-detect
+# Get staged files from args or auto-detect. In CI there are no staged files,
+# so fall back to scanning tracked files.
 if [ $# -gt 0 ]; then
     files="$@"
 else
     files=$(git diff --cached --name-only --diff-filter=ACM)
+    if [ -z "$files" ]; then
+        files=$(git ls-files)
+    fi
 fi
+
+if [ -z "$files" ]; then
+    exit 0
+fi
+
+# Files that intentionally document the blocked patterns.
+filtered_files=""
+for file in $files; do
+    case "$file" in
+        docs/privacy.md|scripts/scan-privacy.sh)
+            continue
+            ;;
+        *)
+            filtered_files="$filtered_files $file"
+            ;;
+    esac
+done
+files="$filtered_files"
 
 if [ -z "$files" ]; then
     exit 0
