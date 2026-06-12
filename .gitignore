@@ -1,5 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.eggs/
+*.egg-info/
+build/
+dist/
+*.whl
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
+# Beads
+.beads/
+!.beads/issues.jsonl
+.dolt/**
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets scan
+.env*
+.secrets/
+
+# Coverage
+htmlcov/
+.coverage
+.pytest_cache/
