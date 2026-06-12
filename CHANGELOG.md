@@ -9,16 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Compatibility matrix doc (`docs/beads-compatibility.md`) defining supported/unsupported Beads setup modes, minimum bd version, and the machine-readable bd output contract.
-- Automated compatibility smoke tests covering standard embedded, stealth embedded, and nested cwd modes.
-- Contract tests for fields hb consumes from `bd ready --json`, `bd show --json`, `bd comments --json`, and `bd context --json`.
-- Stderr-warning capture tests that fail if bd --json commands emit deprecation/removal notices.
-- Installed-package preflight test: builds a wheel from source, pip installs it in a temp venv, and verifies `hb --version` works.
-- bd-on-PATH auto-discovery preflight test: runs installed hb console script against a real Beads workspace, confirming bd is found from PATH.
-- Release matrix doc (`docs/release-matrix.md`) defining what artifacts ship where, sequencing constraints, versioning policy, and the pre-PyPI gate checklist for GitHub Release, TestPyPI, PyPI, and Hermes Agent upstream skill distribution.
+- `src/hermes_beads/bd_helpers.py` module with `check_bd_available()`, `run_bd()`, and `run_bd_json()` helpers that raise `click.ClickException` with actionable messages and preserved stderr when bd is missing, returns a non-zero exit, or produces invalid JSON.
+- Unit tests (`tests/test_bd_helpers.py`) covering three error paths: bd not on PATH, non-zero exit with stderr, and invalid JSON output.
 
 ### Changed
 
+- Refactored `cli.py` to delegate all `bd` subprocess calls to `bd_helpers`, replacing the old `run_bd_json()` and `run_bd_text()` inline implementations. Exception catches updated from `(subprocess.CalledProcessError, json.JSONDecodeError)` to `click.ClickException`.
 - Rewrote ROADMAP.md from stale four-phase bootstrap plan to v1.0.1 product roadmap with ten phased stages, agy and Claude review conclusions, and explicit done/not-done status table.
 - Added product contract doc (`docs/product-contract.md`) defining authority model, mutation semantics, dry-run/apply parity, idempotency requirements, and backend boundaries.
 - Regenerated GitBook docs (`docs/README.md`, `docs/SUMMARY.md`) with Roadmap, Beads Compatibility, Product Contract, and Release Matrix entries in navigation.

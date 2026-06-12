@@ -17,8 +17,9 @@ def mock_repo_root(tmp_path: Path) -> Generator[Path, None, None]:
     src_dir.mkdir(parents=True)
     (tmp_path / "VERSION").write_text("1.0.0-test\n")
     (src_dir / "__init__.py").write_text("")
-    cli_source = Path(__file__).parent.parent / "src" / "hermes_beads" / "cli.py"
-    (src_dir / "cli.py").write_text(cli_source.read_text())
+    for module in ("cli.py", "bd_helpers.py"):
+        source = Path(__file__).parent.parent / "src" / "hermes_beads" / module
+        (src_dir / module).write_text(source.read_text())
     yield tmp_path
 
 

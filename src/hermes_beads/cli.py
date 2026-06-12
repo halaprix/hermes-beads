@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -16,6 +15,7 @@ from typing import Any
 
 import click
 
+from hermes_beads.bd_helpers import run_bd, run_bd_json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -38,28 +38,6 @@ def _json_env(name: str) -> Any | None:
     return json.loads(raw)
 
 
-def run_bd_json(args: list[str]) -> Any:
-    """Run bd with JSON output and return parsed data."""
-    result = subprocess.run(
-        ["bd", *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout or "null")
-
-
-def run_bd_text(args: list[str]) -> str:
-    """Run bd and return stdout as text."""
-    result = subprocess.run(
-        ["bd", *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout
-
-
 def get_bead_json(bead_id: str) -> dict[str, Any] | None:
     """Get bead data via bd show --json."""
     mock_data = _json_env("HB_MOCK_BD_SHOW_JSON")
@@ -68,7 +46,7 @@ def get_bead_json(bead_id: str) -> dict[str, Any] | None:
     else:
         try:
             beads = run_bd_json(["show", bead_id, "--json"])
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
+        except click.ClickException:
             return None
 
     if isinstance(beads, dict):
@@ -86,7 +64,7 @@ def get_ready_beads() -> list[dict[str, Any]]:
         return list(mock_data)
     try:
         data = run_bd_json(["ready", "--json"])
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except click.ClickException:
         return []
     return list(data or [])
 
@@ -129,7 +107,7 @@ def get_comments(bead_id: str, bead: dict[str, Any] | None = None) -> list[dict[
 
     try:
         return normalize_comments(run_bd_json(["comments", bead_id, "--json"]))
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except click.ClickException:
         return []
 
 
@@ -237,14 +215,14 @@ def apply_result_sync_operations(operations: list[dict[str, Any]]) -> None:
     for operation in operations:
         bead_id = str(operation["bead_id"])
         if operation["op"] == "comment":
-            run_bd_text(["comments", "add", bead_id, str(operation["body"])])
+            run_bd(["comments", "add", bead_id, str(operation["body"])])
         elif operation["op"] == "close":
-            run_bd_text(["close", bead_id, "--reason", str(operation["reason"])])
+            run_bd(["close", bead_id, "--reason", str(operation["reason"])])
         elif operation["op"] == "update-metadata":
             args = ["update", bead_id]
             for key, value in operation.get("metadata", {}).items():
                 args.extend(["--set-metadata", f"{key}={value}"])
-            run_bd_text(args)
+            run_bd(args)
 
 
 @click.group()
