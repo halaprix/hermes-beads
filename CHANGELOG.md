@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.3.0] - 2026-06-12
+
+### Added
+
+- GitHub Actions CI for privacy scan and pytest
+- Cross-machine Beads sync protocol documentation
+- Gate resolver architecture documentation and dry-run profile selection
+- Bridge cron polling documentation
+- Project state dashboard specification
+- Dry-run dispatch bridge: `hb bridge dispatch --dry-run`
+- Result-sync bridge: `hb bridge sync-results --dry-run` and `--apply`
+- Comment-backed handoff packets using `bd comments <id> --json`
+- `hermes_iteration` retry tracking in result-sync operations
+- End-to-end smoke test using a temporary Beads workspace
+
+### Changed
+
+- Tightened PR/release policy around one-bead-per-PR, mechanical release commits, and task-graph-only orchestration commits
+- Updated privacy scanner to scan tracked files in CI while allowlisting files that intentionally document blocked patterns
+- Updated `docs/kanban-bridge.md` from design-only phases to implemented dry-run commands
+
+### Fixed
+
+- Corrected handoff comment command documentation from `bd comment list` to `bd comments <id> --json`
+- Fixed gate profile fallback so architecture-only beads route to `planner`
+
 ## [0.2.0] - 2026-06-12
 
 ### Added
@@ -35,23 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public repository guardrails: LICENSE (MIT), .gitignore, SECURITY.md, docs/privacy.md
 - Privacy scan script: `scripts/scan-privacy.sh`
 - Beads task graph: 7 bootstrap tasks tracking project lifecycle
-- Governance docs: CHANGELOG.md, VERSION, CONTRIBUTING.md, ROADMAP.md, docs/pr-flow.md
+- Governance docs: CHANGELOG.md, VERSION, CONTRIBUTING.md, SECURITY.md, ROADMAP.md, docs/pr-flow.md
 - PR template: `.github/pull_request_template.md`
 - Beads usage guide: `docs/beads-usage.md`
-
-### Changed
-
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
-
-## [Unreleased]
-
-### Added
 
 ### Changed
 
