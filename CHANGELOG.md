@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Rewrote ROADMAP.md from stale four-phase bootstrap plan to v1.0.1 product roadmap with ten phased stages, agy and Claude review conclusions, and explicit done/not-done status table.
+- Added product contract doc (`docs/product-contract.md`) defining authority model, mutation semantics, dry-run/apply parity, idempotency requirements, and backend boundaries.
 
 ### Deprecated
 

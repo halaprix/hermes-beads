@@ -5,6 +5,7 @@
 * [Metadata Schema](metadata-schema.md)
 * [Handoff Packet](handoff-packet.md)
 * [Kanban Bridge](kanban-bridge.md)
+* [Product Contract](product-contract.md)
 * [Gate Resolver](gate-resolver.md)
 * [Beads Compatibility](beads-compatibility.md)
 * [Cron Polling](cron-polling.md)

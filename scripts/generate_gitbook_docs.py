@@ -15,6 +15,7 @@ DOC_PAGES = [
     ("Metadata Schema", "metadata-schema.md"),
     ("Handoff Packet", "handoff-packet.md"),
     ("Kanban Bridge", "kanban-bridge.md"),
+    ("Product Contract", "product-contract.md"),
     ("Gate Resolver", "gate-resolver.md"),
     ("Beads Compatibility", "beads-compatibility.md"),
     ("Cron Polling", "cron-polling.md"),
@@ -34,6 +35,7 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Metadata Schema](metadata-schema.md) — public metadata contract used by agents.
 - [Handoff Packet](handoff-packet.md) — JSON context shape passed between Beads and Hermes.
 - [Kanban Bridge](kanban-bridge.md) — bridge design and implemented dry-run commands.
+- [Product Contract](product-contract.md) — authority model, mutation semantics, idempotency rules.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
 - [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
 
