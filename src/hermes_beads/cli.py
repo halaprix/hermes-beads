@@ -16,6 +16,7 @@ from typing import Any
 import click
 
 from hermes_beads.bd_helpers import check_bd_available, run_bd, run_bd_json
+from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -92,6 +93,10 @@ def get_comments(bead_id: str, bead: dict[str, Any] | None = None) -> list[dict[
     """Fetch comments for a bead, falling back to embedded bd show fields."""
     mock_data = _json_env("HB_MOCK_BD_COMMENTS_JSON")
     if mock_data is not None:
+        # If mock data has bead_id fields, filter to the requested bead.
+        # If no bead_id field (backward compat), return as-is.
+        if mock_data and isinstance(mock_data[0], dict) and "bead_id" in mock_data[0]:
+            mock_data = [c for c in mock_data if c.get("bead_id") == bead_id]
         return normalize_comments(mock_data)
 
     # If any BD mock is set but HB_MOCK_BD_COMMENTS_JSON is not, we're in a
@@ -181,17 +186,48 @@ def next_iteration(bead: dict[str, Any]) -> int:
     return int(metadata.get("hermes_iteration", 0) or 0) + 1
 
 
-def build_result_sync_operations(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map Hermes Kanban result records into dry-run bd operations."""
+def build_result_sync_operations(
+    results: list[dict[str, Any]],
+    existing_comments: dict[str, list[dict[str, str]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Map Hermes Kanban result records into dry-run bd operations.
+
+    Parameters
+    ----------
+    results:
+        List of result dicts from Hermes Kanban (each must contain bead_id
+        and status; may contain dispatch_id and summary).
+    existing_comments:
+        Optional mapping of bead_id -> list of comment dicts. Each comment
+        dict must have a ``body`` field. If provided, any result whose
+        operation ID is already present in an existing comment's
+        ``hermes-beads-op:`` marker is emitted as a ``skipped`` operation
+        instead of a real write.
+    """
+    existing_comments = existing_comments or {}
     operations: list[dict[str, Any]] = []
     for result in results:
         bead_id = result.get("bead_id") or result.get("source_bead_id")
         if not bead_id:
             continue
+        dispatch_id = result.get("dispatch_id", "unknown")
         status = result.get("status", "")
         summary = result.get("summary", "")
+
+        op_id = build_op_id(bead_id, dispatch_id, OpStatus.COMPLETED, summary)
+        seen_ids: set[str] = set()
+        for comment in existing_comments.get(bead_id, []):
+            marker = parse_op_marker(comment.get("body", ""))
+            if marker:
+                seen_ids.add(marker)
+
+        if op_id in seen_ids:
+            operations.append({"op": "skipped", "bead_id": bead_id, "reason": "already applied"})
+            continue
+
         if status in {"completed", "success", "done"}:
-            operations.append({"op": "comment", "bead_id": bead_id, "body": f"result: {summary}"})
+            comment_body = f"hermes-beads-op: {op_id}\nresult: {summary}"
+            operations.append({"op": "comment", "bead_id": bead_id, "body": comment_body})
             operations.append({"op": "close", "bead_id": bead_id, "reason": "kanban task completed"})
         elif status in {"failed", "timeout", "error"}:
             bead = get_bead_json(str(bead_id)) or {"id": bead_id, "metadata": {}}
@@ -298,7 +334,14 @@ def bridge_sync_results(dry_run: bool, apply_ops: bool, results_file: str) -> No
     results = json.loads(Path(results_file).read_text())
     if isinstance(results, dict):
         results = results.get("results", [])
-    operations = build_result_sync_operations(list(results))
+    # Build existing_comments map: bead_id -> list of comment dicts (with 'body' field)
+    existing_comments: dict[str, list[dict[str, str]]] = {}
+    for result in results:
+        bead_id = str(result.get("bead_id") or result.get("source_bead_id") or "")
+        if bead_id and bead_id not in existing_comments:
+            comments = get_comments(bead_id)
+            existing_comments[bead_id] = [{"body": c.get("body", "")} for c in comments]
+    operations = build_result_sync_operations(list(results), existing_comments)
     if apply_ops:
         apply_result_sync_operations(operations)
     click.echo(json.dumps({"operations": operations, "applied": apply_ops}, indent=2))

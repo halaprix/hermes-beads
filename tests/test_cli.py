@@ -17,9 +17,10 @@ def mock_repo_root(tmp_path: Path) -> Generator[Path, None, None]:
     src_dir.mkdir(parents=True)
     (tmp_path / "VERSION").write_text("1.0.0-test\n")
     (src_dir / "__init__.py").write_text("")
-    for module in ("cli.py", "bd_helpers.py"):
-        source = Path(__file__).parent.parent / "src" / "hermes_beads" / module
-        (src_dir / module).write_text(source.read_text())
+    # Copy all .py modules from the package (not just a hardcoded list)
+    pkg_src = Path(__file__).parent.parent / "src" / "hermes_beads"
+    for module in pkg_src.glob("*.py"):
+        (src_dir / module.name).write_text(module.read_text())
     yield tmp_path
 
 
@@ -141,10 +142,11 @@ def test_result_sync_success_operations(mock_repo_root: Path, tmp_path: Path) ->
     result = run_hb(
         ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
         mock_repo_root,
+        env={"HB_MOCK_BD_COMMENTS_JSON": "[]"},
     )
     assert result.returncode == 0
     assert json.loads(result.stdout)["operations"] == [
-        {"op": "comment", "bead_id": "hb-xaz", "body": "result: ok"},
+        {"op": "comment", "bead_id": "hb-xaz", "body": "hermes-beads-op: hb-xaz-8262b954\nresult: ok"},
         {"op": "close", "bead_id": "hb-xaz", "reason": "kanban task completed"},
     ]
 
@@ -155,7 +157,8 @@ def test_result_sync_failed_increments_iteration(mock_repo_root: Path, tmp_path:
     env = {
         "HB_MOCK_BD_SHOW_JSON": json.dumps(
             [bead(id="hb-xaz", metadata={"hermes_iteration": 2, "hermes_profile": "ts-dev"})]
-        )
+        ),
+        "HB_MOCK_BD_COMMENTS_JSON": "[]",
     }
     result = run_hb(
         ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
@@ -207,3 +210,110 @@ def test_gate_profile_defaults_architecture_to_planner(mock_repo_root: Path) -> 
     result = run_hb(["bridge", "profile", "hb-a6n", "--dry-run"], mock_repo_root, env=env)
     assert result.returncode == 0
     assert json.loads(result.stdout)["hermes_profile"] == "planner"
+
+
+# -----------------------------------------------------------------------
+# hb-b88.4: result-sync dry-run marks duplicate operations as skipped
+# -----------------------------------------------------------------------
+
+def _make_op_id(bead_id: str, dispatch_id: str, summary: str) -> str:
+    """Helper to compute the expected op ID for a completed result."""
+    import hashlib
+    h = hashlib.sha256(f"{bead_id}\n{dispatch_id}\ncompleted\n{summary}".encode()).hexdigest()[:8]
+    return f"{bead_id}-{h}"
+
+
+def test_result_sync_dry_run_marks_duplicate_as_skipped(mock_repo_root: Path, tmp_path: Path) -> None:
+    """When an existing comment already has the op marker, dry-run reports skipped."""
+    bead_id = "hb-dup"
+    dispatch_id = "task-789"
+    summary = "all good"
+    op_id = _make_op_id(bead_id, dispatch_id, summary)
+
+    # Simulate prior sync: comment with hermes-beads-op marker already present
+    existing_comment = {
+        "author": "hermes-beads",
+        "body": f"hermes-beads-op: {op_id}\nresult: {summary}",
+        "created_at": "2026-06-12T10:00:00Z",
+    }
+
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([
+        {"bead_id": bead_id, "status": "completed", "summary": summary, "dispatch_id": dispatch_id}
+    ]))
+
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id=bead_id)]),
+        "HB_MOCK_BD_COMMENTS_JSON": json.dumps([existing_comment]),
+    }
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env=env,
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    # All ops for this bead should be skipped
+    assert all(o.get("op") == "skipped" for o in ops)
+    assert all(o.get("bead_id") == bead_id for o in ops)
+
+
+def test_result_sync_dry_run_first_run_no_marker_still_plans_ops(mock_repo_root: Path, tmp_path: Path) -> None:
+    """When no prior marker exists, dry-run plans comment+close operations."""
+    bead_id = "hb-new"
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([
+        {"bead_id": bead_id, "status": "completed", "summary": "ok"}
+    ]))
+    # No existing comments
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id=bead_id)]),
+        "HB_MOCK_BD_COMMENTS_JSON": json.dumps([]),
+    }
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env=env,
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    op_types = [o["op"] for o in ops]
+    assert "comment" in op_types
+    assert "close" in op_types
+
+
+def test_result_sync_dry_run_mixed_beads_one_skipped_one_new(mock_repo_root: Path, tmp_path: Path) -> None:
+    """One bead has prior marker (skipped), another is fresh (planned)."""
+    bead_old = "hb-old"
+    bead_new = "hb-new"
+    dispatch_id = "task-111"
+    summary = "done"
+    op_id = _make_op_id(bead_old, dispatch_id, summary)
+
+    existing_comment = {
+        "author": "hermes-beads",
+        "body": f"hermes-beads-op: {op_id}",
+        "created_at": "2026-06-12T10:00:00Z",
+    }
+
+    results_file = tmp_path / "results.json"
+    results_file.write_text(json.dumps([
+        {"bead_id": bead_old, "status": "completed", "summary": summary, "dispatch_id": dispatch_id},
+        {"bead_id": bead_new, "status": "completed", "summary": summary, "dispatch_id": dispatch_id},
+    ]))
+
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id=bead_old), bead(id=bead_new)]),
+        "HB_MOCK_BD_COMMENTS_JSON": json.dumps([existing_comment]),
+    }
+    result = run_hb(
+        ["bridge", "sync-results", "--dry-run", "--results-file", str(results_file)],
+        mock_repo_root,
+        env=env,
+    )
+    assert result.returncode == 0
+    ops = json.loads(result.stdout)["operations"]
+    old_ops = [o for o in ops if o.get("bead_id") == bead_old]
+    new_ops = [o for o in ops if o.get("bead_id") == bead_new]
+    assert all(o.get("op") == "skipped" for o in old_ops)
+    assert all(o.get("op") != "skipped" for o in new_ops)
