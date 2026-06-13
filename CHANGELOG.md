@@ -11,13 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `src/hermes_beads/bd_helpers.py` module with `check_bd_available()`, `run_bd()`, and `run_bd_json()` helpers that raise `click.ClickException` with actionable messages and preserved stderr when bd is missing, returns a non-zero exit, or produces invalid JSON.
 - Unit tests (`tests/test_bd_helpers.py`) covering three error paths: bd not on PATH, non-zero exit with stderr, and invalid JSON output.
+- Installed-package and `bd`-on-PATH preflight tests (`tests/test_preflight.py`) verifying `hb --version` works after non-editable install and surfacing friendly errors when `bd` is missing.
+- Stable result operation IDs and a `hermes-beads-op:` comment marker parser (`sync_results.derive_op_id`, `parse_op_marker`) for exactly-once apply.
+- Result-sync dry-run now detects and skips operations that have already been recorded, emitting explicit `skipped` rows with the prior `hermes-beads-op` marker.
+- Result-sync apply is exactly-once for completed results: re-running `--apply` against the same results file closes zero extra beads and reports each op as `skipped` with the stored marker.
+- Failed/timeout result records are marked with a `hermes-beads-op` marker so a follow-up retry of the same record is idempotent and does not double-comment on the Beads issue.
+- Malformed result records produce explicit `skipped` diagnostics in dry-run (with reason) instead of crashing the batch; apply path records the skip in the result envelope.
+- Result-sync idempotency integration test (`tests/test_sync_results_idempotency.py`) covering re-run of dry-run, re-run of apply, and mixed-result-batch behavior.
 
 ### Changed
 
 - Refactored `cli.py` to delegate all `bd` subprocess calls to `bd_helpers`, replacing the old `run_bd_json()` and `run_bd_text()` inline implementations. Exception catches updated from `(subprocess.CalledProcessError, json.JSONDecodeError)` to `click.ClickException`.
+- CLI commands now respect `BD_BIN`/`bd`-mock environment variables so preflight and sync-results tests run hermetic in CI without a real `bd` binary.
 - Rewrote ROADMAP.md from stale four-phase bootstrap plan to v1.0.1 product roadmap with ten phased stages, agy and Claude review conclusions, and explicit done/not-done status table.
 - Added product contract doc (`docs/product-contract.md`) defining authority model, mutation semantics, dry-run/apply parity, idempotency requirements, and backend boundaries.
 - Regenerated GitBook docs (`docs/README.md`, `docs/SUMMARY.md`) with Roadmap, Beads Compatibility, Product Contract, and Release Matrix entries in navigation.
+- Documented op-id formula, dedup-on-rerun, partial re-run, and retry policy in `docs/kanban-bridge.md`, `docs/metadata-schema.md`, and `docs/product-contract.md`.
 
 ### Deprecated
 
