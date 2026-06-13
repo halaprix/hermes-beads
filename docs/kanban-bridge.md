@@ -53,6 +53,13 @@ Implemented as `hb bridge sync-results --dry-run --results-file <file>`. It maps
 ### Phase 4
 Documented in `docs/cron-polling.md`. The cron loop should run dispatch and result-sync on a conservative schedule and stay silent when nothing changed.
 
+The first local-file backend piece is implemented in `src/hermes_beads/local_file_backend.py`.
+It is not wired to `dispatch --apply` yet; that remains a later bead. The backend
+creates deterministic queue records with stable `local-<sha256-prefix>` task IDs,
+skips duplicate payloads by returning the existing ID without appending, raises a
+clear error for corrupt queue JSON, and resolves relative queue-file paths against
+the caller's project root.
+
 ## API Surface
 
 ### Beads Commands

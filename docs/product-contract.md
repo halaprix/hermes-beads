@@ -191,6 +191,27 @@ Kanban. It is the **test harness** for the bridge contract:
 - Results are JSON files that `sync-results` can read back
 - The entire loop (dispatch → execute → sync-results → close) can be tested in CI
 
+The backend implementation lives in `src/hermes_beads/local_file_backend.py`.
+It writes a deterministic JSON queue file with this shape:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "local-<sha256-prefix>",
+      "status": "queued",
+      "payload": { "source": "beads" }
+    }
+  ]
+}
+```
+
+Task IDs are stable hashes of the canonical payload JSON. Re-creating the same
+payload returns the same task ID and leaves the queue unchanged, so the local
+queue can safely be used by future `dispatch --apply` dry-run/apply parity tests.
+Relative queue-file paths are resolved against the project root supplied by the
+caller; absolute paths are preserved.
+
 **Boundary:** the local-file backend MUST implement the same operation interface as the Hermes
 Kanban backend. Switching backends should be a configuration change, not a code change to
 dispatch/sync logic. The backend is injected via a formal dispatch plan boundary:
