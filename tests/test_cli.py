@@ -60,6 +60,71 @@ def bead(**overrides: object) -> dict:
     return data
 
 
+def init_real_bd_workspace(cwd: Path, prefix: str = "cli") -> None:
+    subprocess.run(["git", "init", "-q"], cwd=cwd, check=True)
+    result = subprocess.run(
+        [
+            "bd",
+            "init",
+            "--prefix",
+            prefix,
+            "--quiet",
+            "--non-interactive",
+            "--skip-agents",
+            "--skip-hooks",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def create_ready_bead(cwd: Path, title: str) -> str:
+    result = subprocess.run(
+        [
+            "bd",
+            "create",
+            title,
+            "--metadata",
+            json.dumps(
+                {
+                    "hermes_status": "ready",
+                    "hermes_profile": "ts-dev",
+                    "hermes_mode": "pr",
+                    "hermes_stop_condition": "done means tested",
+                }
+            ),
+            "--json",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    if isinstance(data, list):
+        return data[0]["id"]
+    return data["id"]
+
+
+def show_bead(cwd: Path, bead_id: str) -> dict:
+    result = subprocess.run(
+        ["bd", "show", bead_id, "--json"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    if isinstance(data, list):
+        return data[0]
+    return data
+
+
 def test_version(mock_repo_root: Path) -> None:
     result = run_hb(["--version"], mock_repo_root)
     assert result.returncode == 0
@@ -163,8 +228,9 @@ def test_bridge_dispatch_empty_queue_is_success(mock_repo_root: Path) -> None:
     assert json.loads(result.stdout) == {"tasks": []}
 
 
-def test_bridge_dispatch_apply_local_file_creates_queue_file(mock_repo_root: Path, tmp_path: Path) -> None:
-    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-apply", title="Apply task")])}
+def test_bridge_dispatch_apply_local_file_creates_queue_file(mock_repo_root: Path) -> None:
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    bead_id = create_ready_bead(mock_repo_root, "Apply task")
     queue_file = Path(".hermes-beads/dispatch.json")
 
     result = run_hb(
@@ -178,7 +244,6 @@ def test_bridge_dispatch_apply_local_file_creates_queue_file(mock_repo_root: Pat
             str(queue_file),
         ],
         mock_repo_root,
-        env=env,
     )
 
     assert result.returncode == 0, result.stderr
@@ -186,15 +251,40 @@ def test_bridge_dispatch_apply_local_file_creates_queue_file(mock_repo_root: Pat
     assert data["applied"] is True
     assert data["backend"] == "local-file"
     assert data["queue_file"].endswith(".hermes-beads/dispatch.json")
+    assert len(data["tasks"]) == 1
+    assert data["tasks"][0]["payload"]["source_bead_id"] == bead_id
     queue_path = mock_repo_root / queue_file
     assert queue_path.exists()
     queue = json.loads(queue_path.read_text())
     assert len(queue["tasks"]) == 1
-    assert queue["tasks"][0]["payload"]["source_bead_id"] == "hb-apply"
+    assert queue["tasks"][0]["payload"]["source_bead_id"] == bead_id
+    linked = show_bead(mock_repo_root, bead_id)
+    assert linked["metadata"]["hermes_kanban_task_id"] == data["tasks"][0]["id"]
+
+
+def test_bridge_dispatch_apply_requires_backend_and_queue_file(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-apply", title="Apply task")])}
+
+    missing_backend = run_hb(
+        ["bridge", "dispatch", "--apply", "--queue-file", ".hermes-beads/dispatch.json"],
+        mock_repo_root,
+        env=env,
+    )
+    assert missing_backend.returncode == 1
+    assert "backend local-file" in missing_backend.stderr.lower()
+
+    missing_queue = run_hb(
+        ["bridge", "dispatch", "--apply", "--backend", "local-file"],
+        mock_repo_root,
+        env=env,
+    )
+    assert missing_queue.returncode == 1
+    assert "queue-file" in missing_queue.stderr.lower()
 
 
 def test_bridge_dispatch_apply_local_file_is_idempotent(mock_repo_root: Path) -> None:
-    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-dup", title="Duplicate task")])}
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    create_ready_bead(mock_repo_root, "Duplicate task")
     queue_file = Path(".hermes-beads/dispatch.json")
     args = [
         "bridge",
@@ -206,21 +296,22 @@ def test_bridge_dispatch_apply_local_file_is_idempotent(mock_repo_root: Path) ->
         str(queue_file),
     ]
 
-    first = run_hb(args, mock_repo_root, env=env)
-    second = run_hb(args, mock_repo_root, env=env)
+    first = run_hb(args, mock_repo_root)
+    second = run_hb(args, mock_repo_root)
 
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
+    assert json.loads(second.stdout)["tasks"] == []
     queue_path = mock_repo_root / queue_file
     queue = json.loads(queue_path.read_text())
     assert len(queue["tasks"]) == 1
-    assert queue["tasks"][0]["payload"]["source_bead_id"] == "hb-dup"
 
 
 def test_bridge_dispatch_apply_matches_dry_run_payloads(mock_repo_root: Path) -> None:
-    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-plan", title="Parity task")])}
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    create_ready_bead(mock_repo_root, "Parity task")
     queue_file = Path(".hermes-beads/dispatch.json")
-    dry_run = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root, env=env)
+    dry_run = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root)
     apply_run = run_hb(
         [
             "bridge",
@@ -232,7 +323,6 @@ def test_bridge_dispatch_apply_matches_dry_run_payloads(mock_repo_root: Path) ->
             str(queue_file),
         ],
         mock_repo_root,
-        env=env,
     )
 
     assert dry_run.returncode == 0, dry_run.stderr

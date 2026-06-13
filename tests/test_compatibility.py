@@ -113,6 +113,43 @@ class TestStandardEmbedded:
         body = json.loads(task["body"])
         assert body["bead_id"] == bead_id
 
+    def test_hb_dispatch_apply_links_metadata_and_skips_second_run(self, tmp_path: Path) -> None:
+        _init_temp_beads(tmp_path, prefix="std")
+        bead_id = _create_test_bead(
+            tmp_path,
+            {
+                "hermes_status": "ready",
+                "hermes_profile": "ts-dev",
+                "hermes_mode": "pr",
+            },
+        )
+        queue_file = Path(".queue/dispatch.json")
+        args = [
+            "bridge",
+            "dispatch",
+            "--apply",
+            "--backend",
+            "local-file",
+            "--queue-file",
+            str(queue_file),
+        ]
+
+        first = _run_hb(tmp_path, args)
+        assert first.returncode == 0, first.stderr
+        first_payload = json.loads(first.stdout)
+        assert len(first_payload["tasks"]) == 1
+
+        linked = json.loads(_run_bd_json(tmp_path, ["show", bead_id]).stdout)
+        if isinstance(linked, list):
+            linked = linked[0]
+        assert linked["metadata"]["hermes_kanban_task_id"] == first_payload["tasks"][0]["id"]
+
+        second = _run_hb(tmp_path, args)
+        assert second.returncode == 0, second.stderr
+        second_payload = json.loads(second.stdout)
+        assert second_payload["tasks"] == []
+        assert json.loads((tmp_path / queue_file).read_text())["tasks"] == first_payload["tasks"]
+
     def test_hb_profile_dry_run(self, tmp_path: Path) -> None:
         _init_temp_beads(tmp_path, prefix="std")
         bead_id = _create_test_bead(tmp_path, {

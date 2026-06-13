@@ -192,6 +192,28 @@ def build_kanban_payload(bead: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def dispatch_linked_task_id(bead: dict[str, Any]) -> str:
+    """Return the existing dispatch link ID, if any."""
+    metadata = bead.get("metadata", {}) or {}
+    task_id = metadata.get("hermes_kanban_task_id")
+    return str(task_id or "")
+
+
+def dispatch_bead_is_linked(bead: dict[str, Any]) -> bool:
+    """Return whether a bead already has a dispatch/task link."""
+    return bool(dispatch_linked_task_id(bead))
+
+
+def dispatch_candidates(ready_beads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter ready beads down to ones without a dispatch link."""
+    return [bead for bead in ready_beads if not dispatch_bead_is_linked(bead)]
+
+
+def write_dispatch_link(bead_id: str, task_id: str) -> None:
+    """Write the dispatched task id back to Beads metadata."""
+    run_bd(["update", bead_id, "--set-metadata", f"hermes_kanban_task_id={task_id}"])
+
+
 def next_iteration(bead: dict[str, Any]) -> int:
     """Return the next retry iteration for a failed/timeout bead."""
     metadata = bead.get("metadata", {}) or {}
@@ -343,7 +365,9 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
         sys.exit(1)
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
         check_bd_available()
-    plan = build_dispatch_plan(get_ready_beads(), payload_builder=build_kanban_payload)
+    ready_beads = get_ready_beads()
+    dispatch_beads = dispatch_candidates(ready_beads)
+    plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
     if dry_run:
         tasks = [op.payload for op in plan if op.kind is DispatchOpKind.CREATE]
         click.echo(json.dumps({"tasks": tasks}, indent=2))
@@ -359,7 +383,10 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
     for op in plan:
         if op.kind is not DispatchOpKind.CREATE:
             continue
+        bead_id = str(op.payload.get("source_bead_id", ""))
         task_id = queue_backend.create(op.payload)
+        if bead_id:
+            write_dispatch_link(bead_id, task_id)
         task = queue_backend.show(task_id)
         if task is not None:
             applied_tasks.append(task)

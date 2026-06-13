@@ -120,15 +120,16 @@ applied", not the comment text or close status alone (those can be set by other 
 
 ```
 hb bridge dispatch --dry-run      # preview only — implemented
-hb bridge dispatch --apply        # NOT YET IMPLEMENTED
+hb bridge dispatch --apply        # implemented for --backend local-file
 ```
 
-**Planned behavior:**
+**Current behavior:**
 1. Read `bd ready --json` to find unblocked, open beads
-2. For each ready bead, create a dispatch artifact (local-file or Hermes Kanban task)
-3. Write `metadata.hermes_kanban_task_id` (or equivalent) back to the bead
+2. Skip beads that already have `metadata.hermes_kanban_task_id`
+3. For each remaining bead, create a dispatch artifact (local-file or Hermes Kanban task)
+4. Write `metadata.hermes_kanban_task_id` (or equivalent) back to the bead
 
-**Required idempotency rules (before go-live):**
+**Required idempotency rules:**
 
 - A bead that already has `hermes_kanban_task_id` set MUST be skipped (no duplicate dispatch).
 - If `hermes_status` is `in_progress` and the bead has a kanban task id, it MUST NOT be
