@@ -128,13 +128,15 @@ hb bridge dispatch --apply        # implemented for --backend local-file
 2. Skip beads that already have `metadata.hermes_kanban_task_id`
 3. For each remaining bead, create a dispatch artifact (local-file or Hermes Kanban task)
 4. Write `metadata.hermes_kanban_task_id` (or equivalent) back to the bead
+5. Mark the Beads `status` field as `in_progress` so the bead leaves the ready queue
 
 **Required idempotency rules:**
 
 - A bead that already has `hermes_kanban_task_id` set MUST be skipped (no duplicate dispatch).
-- If `hermes_status` is `in_progress` and the bead has a kanban task id, it MUST NOT be
-  re-dispatched.
+- If the bead is already `in_progress`, it MUST NOT be re-dispatched.
 - Dry-run output MUST exactly match the planned mutations of `--apply` (one-to-one parity).
+- The bridge may mirror `hermes_status` for compatibility, but the Beads `status` field is the
+  canonical source of truth.
 - When the local-file backend is active, dispatch writes handoff packets to the configured
   output directory. Re-running dispatch on the same set of ready beads MUST produce identical
   packets (content-addressable or skip-if-exists semantics).

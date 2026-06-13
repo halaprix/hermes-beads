@@ -307,12 +307,12 @@ def test_bridge_dispatch_apply_local_file_is_idempotent(mock_repo_root: Path) ->
     assert len(queue["tasks"]) == 1
 
 
-def test_bridge_dispatch_apply_matches_dry_run_payloads(mock_repo_root: Path) -> None:
+def test_bridge_dispatch_apply_marks_bead_not_ready(mock_repo_root: Path) -> None:
     init_real_bd_workspace(mock_repo_root, prefix="cli")
-    create_ready_bead(mock_repo_root, "Parity task")
+    bead_id = create_ready_bead(mock_repo_root, "Status gate task")
     queue_file = Path(".hermes-beads/dispatch.json")
-    dry_run = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root)
-    apply_run = run_hb(
+
+    result = run_hb(
         [
             "bridge",
             "dispatch",
@@ -325,11 +325,19 @@ def test_bridge_dispatch_apply_matches_dry_run_payloads(mock_repo_root: Path) ->
         mock_repo_root,
     )
 
-    assert dry_run.returncode == 0, dry_run.stderr
-    assert apply_run.returncode == 0, apply_run.stderr
-    dry_tasks = json.loads(dry_run.stdout)["tasks"]
-    applied_tasks = json.loads(apply_run.stdout)["tasks"]
-    assert [task["payload"] for task in applied_tasks] == dry_tasks
+    assert result.returncode == 0, result.stderr
+    ready = subprocess.run(
+        ["bd", "ready", "--json"],
+        cwd=mock_repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ready.returncode == 0, ready.stderr
+    ready_data = json.loads(ready.stdout)
+    assert bead_id not in {item["id"] for item in ready_data}
+    bead = show_bead(mock_repo_root, bead_id)
+    assert bead["status"] == "in_progress"
 
 
 def test_result_sync_success_operations(mock_repo_root: Path, tmp_path: Path) -> None:

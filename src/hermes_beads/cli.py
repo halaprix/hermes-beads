@@ -214,6 +214,11 @@ def write_dispatch_link(bead_id: str, task_id: str) -> None:
     run_bd(["update", bead_id, "--set-metadata", f"hermes_kanban_task_id={task_id}"])
 
 
+def gate_dispatch_bead(bead_id: str) -> None:
+    """Mark a dispatched bead in_progress so it leaves the ready queue."""
+    run_bd(["update", bead_id, "--status", "in_progress"])
+
+
 def next_iteration(bead: dict[str, Any]) -> int:
     """Return the next retry iteration for a failed/timeout bead."""
     metadata = bead.get("metadata", {}) or {}
@@ -387,6 +392,7 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
         task_id = queue_backend.create(op.payload)
         if bead_id:
             write_dispatch_link(bead_id, task_id)
+            gate_dispatch_bead(bead_id)
         task = queue_backend.show(task_id)
         if task is not None:
             applied_tasks.append(task)

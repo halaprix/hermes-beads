@@ -17,7 +17,7 @@ All fields live under the `metadata` key on a Beads issue. Agents MUST NOT write
 
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
-| `hermes_status` | string | `ready`, `in_progress`, `blocked`, `complete`, `failed` | Execution state of this task |
+| `hermes_status` | string | `ready`, `in_progress`, `blocked`, `complete`, `failed` | Advisory mirror of the bead lifecycle; canonical state lives in the Beads `status` field |
 | `hermes_profile` | string | Hermes profile name (e.g., `ts-dev`, `docs`, `planner`) | Recommended Hermes profile for this task |
 | `hermes_mode` | string | `pr`, `manual` | Whether this task requires PR flow or manual verification |
 | `hermes_created_by` | string | agent identifier | Which agent created this bead (optional) |
@@ -34,6 +34,8 @@ open → in_progress → complete
            ↓
         failed → in_progress (retry)
 ```
+
+The Beads `status` field is canonical. `hermes_status` is an advisory mirror used by the bridge and should not be treated as the source of truth.
 
 | State | Meaning |
 |-------|---------|
