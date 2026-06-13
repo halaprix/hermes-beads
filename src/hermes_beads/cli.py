@@ -21,6 +21,10 @@ from hermes_beads.dispatch_ops import (
     build_dispatch_plan,
 )
 from hermes_beads.local_file_backend import LocalFileQueueBackend
+from hermes_beads.hermes_kanban_backend import (
+    HermesKanbanBackend,
+    HermesKanbanBackendError,
+)
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -353,17 +357,17 @@ def bridge() -> None:
 
 @bridge.command("dispatch")
 @click.option("--dry-run", is_flag=True, help="Print planned Kanban payloads without side effects")
-@click.option("--apply", "apply_ops", is_flag=True, help="Write planned tasks to a local-file queue")
-@click.option("--backend", type=click.Choice(["local-file"]), default=None, help="Dispatch backend to use when applying")
+@click.option("--apply", "apply_ops", is_flag=True, help="Apply planned tasks through a dispatch backend")
+@click.option("--backend", type=click.Choice(["local-file", "hermes-cli"]), default=None, help="Dispatch backend to use when applying")
 @click.option("--queue-file", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Queue file for the local-file backend")
 def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_file: Path | None) -> None:
     """Map ready beads to Hermes Kanban task payloads.
 
     Planning logic lives in :mod:`hermes_beads.dispatch_ops`; this
     command is a thin Click/IO adapter that delegates to the pure
-    planner. Dry-run stays JSON-only. Apply is supported only for the
-    local-file backend, which writes deterministic queue records to a
-    JSON file.
+    planner. Dry-run stays JSON-only. Apply is supported through the
+    selected backend, which may either write deterministic queue records
+    to a JSON file or shell out to the Hermes CLI.
     """
     if dry_run == apply_ops:
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
@@ -377,36 +381,43 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
         tasks = [op.payload for op in plan if op.kind is DispatchOpKind.CREATE]
         click.echo(json.dumps({"tasks": tasks}, indent=2))
         return
-    if backend != "local-file":
-        click.echo("Error: --apply is only implemented for --backend local-file", err=True)
+    if backend is None:
+        click.echo("Error: choose a dispatch backend with --backend", err=True)
         sys.exit(1)
-    if queue_file is None:
-        click.echo("Error: --queue-file is required for --backend local-file", err=True)
+    if backend == "local-file":
+        if queue_file is None:
+            click.echo("Error: --queue-file is required for --backend local-file", err=True)
+            sys.exit(1)
+        dispatch_backend: Any = LocalFileQueueBackend(queue_file, project_root=Path.cwd())
+    elif backend == "hermes-cli":
+        dispatch_backend = HermesKanbanBackend()
+    else:
+        click.echo(f"Error: unsupported dispatch backend: {backend}", err=True)
         sys.exit(1)
-    queue_backend = LocalFileQueueBackend(queue_file, project_root=Path.cwd())
     applied_tasks: list[dict[str, Any]] = []
-    for op in plan:
-        if op.kind is not DispatchOpKind.CREATE:
-            continue
-        bead_id = str(op.payload.get("source_bead_id", ""))
-        task_id = queue_backend.create(op.payload)
-        if bead_id:
-            write_dispatch_link(bead_id, task_id)
-            gate_dispatch_bead(bead_id)
-        task = queue_backend.show(task_id)
-        if task is not None:
-            applied_tasks.append(task)
-    click.echo(
-        json.dumps(
-            {
-                "backend": "local-file",
-                "queue_file": str(queue_backend.queue_file),
-                "applied": True,
-                "tasks": applied_tasks,
-            },
-            indent=2,
-        )
-    )
+    try:
+        for op in plan:
+            if op.kind is not DispatchOpKind.CREATE:
+                continue
+            bead_id = str(op.payload.get("source_bead_id", ""))
+            task_id = dispatch_backend.create(op.payload)
+            if bead_id:
+                write_dispatch_link(bead_id, task_id)
+                gate_dispatch_bead(bead_id)
+            task = dispatch_backend.show(task_id)
+            if task is not None:
+                applied_tasks.append(task)
+    except HermesKanbanBackendError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+    output: dict[str, Any] = {
+        "backend": backend,
+        "applied": True,
+        "tasks": applied_tasks,
+    }
+    if backend == "local-file":
+        output["queue_file"] = str(dispatch_backend.queue_file)
+    click.echo(json.dumps(output, indent=2))
 
 
 @bridge.command("sync-results")

@@ -120,7 +120,7 @@ applied", not the comment text or close status alone (those can be set by other 
 
 ```
 hb bridge dispatch --dry-run      # preview only — implemented
-hb bridge dispatch --apply        # implemented for --backend local-file
+hb bridge dispatch --apply        # implemented for --backend local-file or --backend hermes-cli
 ```
 
 **Current behavior:**

@@ -196,3 +196,103 @@ def test_sync_results_failed_retry_idempotent(tmp_path: Path) -> None:
     assert sync2.returncode == 0, sync2.stderr
     iter2 = get_iteration()
     assert iter2 == iter1, f"Iteration changed after re-apply: {iter1} -> {iter2}"
+
+
+def test_local_file_smoke_loop_against_temp_product_repo(tmp_path: Path) -> None:
+    """Full source-tree smoke: temp repo, local-file dispatch, fake result, sync."""
+    repo_root = Path(__file__).resolve().parents[1]
+    if subprocess.run(["bd", "version"], capture_output=True).returncode != 0:
+        pytest.skip("bd CLI is not installed")
+
+    product_repo = tmp_path / "product"
+    product_repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=product_repo, check=True)
+    init = run_bd(product_repo, ["init", "--prefix", "smoke", "--quiet", "--non-interactive", "--skip-agents", "--skip-hooks"])
+    assert init.returncode == 0, init.stderr
+
+    created = run_bd(
+        product_repo,
+        [
+            "create",
+            "Local-file smoke",
+            "--type",
+            "task",
+            "--priority",
+            "1",
+            "--metadata",
+            json.dumps({"hermes_profile": "ts-dev", "hermes_mode": "pr"}),
+            "--json",
+        ],
+    )
+    assert created.returncode == 0, created.stderr
+    bead_id = json.loads(created.stdout)["id"]
+
+    queue_file = product_repo / ".queue" / "dispatch.json"
+    dispatch = run_cli(
+        repo_root,
+        product_repo,
+        ["bridge", "dispatch", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+    )
+    assert dispatch.returncode == 0, dispatch.stderr
+    dispatch_payload = json.loads(dispatch.stdout)
+    assert dispatch_payload["applied"] is True
+    assert dispatch_payload["backend"] == "local-file"
+    assert len(dispatch_payload["tasks"]) == 1
+    task = dispatch_payload["tasks"][0]
+    source_bead_id = task.get("source_bead_id") or task["payload"]["source_bead_id"]
+    assert source_bead_id == bead_id
+    assert queue_file.exists()
+    queue = json.loads(queue_file.read_text())
+    assert len(queue["tasks"]) == 1
+    assert queue["tasks"][0]["id"] == task["id"]
+
+    results_file = product_repo / "results.json"
+    results_file.write_text(
+        json.dumps(
+            [
+                {
+                    "source_bead_id": bead_id,
+                    "dispatch_id": task["id"],
+                    "status": "completed",
+                    "summary": "smoke completed",
+                }
+            ]
+        )
+    )
+    sync = run_cli(repo_root, product_repo, ["bridge", "sync-results", "--apply", "--results-file", str(results_file)])
+    assert sync.returncode == 0, sync.stderr
+    sync_payload = json.loads(sync.stdout)
+    assert sync_payload["applied"] is True
+
+    first_comments = run_bd(product_repo, ["comments", bead_id, "--json"])
+    assert first_comments.returncode == 0, first_comments.stderr
+    first_comments_stdout = first_comments.stdout
+    queue_before = queue_file.read_text()
+
+    # Re-run the same dispatch + sync loop; it should be a no-op.
+    dispatch_again = run_cli(
+        repo_root,
+        product_repo,
+        ["bridge", "dispatch", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+    )
+    assert dispatch_again.returncode == 0, dispatch_again.stderr
+    dispatch_again_payload = json.loads(dispatch_again.stdout)
+    assert dispatch_again_payload["applied"] is True
+    assert dispatch_again_payload["backend"] == "local-file"
+    assert dispatch_again_payload["tasks"] == []
+    assert queue_file.read_text() == queue_before
+
+    sync_again = run_cli(repo_root, product_repo, ["bridge", "sync-results", "--apply", "--results-file", str(results_file)])
+    assert sync_again.returncode == 0, sync_again.stderr
+    sync_again_payload = json.loads(sync_again.stdout)
+    assert sync_again_payload["applied"] is True
+
+    shown = run_bd(product_repo, ["show", bead_id, "--json"])
+    assert shown.returncode == 0, shown.stderr
+    bead = json.loads(shown.stdout)[0]
+    assert bead["status"] == "closed"
+
+    comments = run_bd(product_repo, ["comments", bead_id, "--json"])
+    assert comments.returncode == 0, comments.stderr
+    assert comments.stdout == first_comments_stdout
+    assert "smoke completed" in comments.stdout

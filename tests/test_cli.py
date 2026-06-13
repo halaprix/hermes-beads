@@ -125,6 +125,83 @@ def show_bead(cwd: Path, bead_id: str) -> dict:
     return data
 
 
+def install_fake_hermes(tmp_path: Path, fail_create: bool = False) -> tuple[Path, Path]:
+    """Install a fake `hermes` executable that records argv to a log file."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "fake-hermes.log"
+    script = bin_dir / "hermes"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from __future__ import annotations",
+                "import json",
+                "import os",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "log = Path(os.environ['FAKE_HERMES_LOG'])",
+                "log.parent.mkdir(parents=True, exist_ok=True)",
+                "with log.open('a', encoding='utf-8') as fh:",
+                "    fh.write(json.dumps(sys.argv[1:]) + '\\\\n')",
+                "",
+                "args = sys.argv[1:]",
+                "if len(args) < 2 or args[0] != 'kanban':",
+                "    print('unexpected command', file=sys.stderr)",
+                "    sys.exit(2)",
+                "",
+                "if args[1] == 'create':",
+                "    if os.environ.get('FAKE_HERMES_CREATE_FAIL') == '1':",
+                "        print('create failed before mutation', file=sys.stderr)",
+                "        sys.exit(1)",
+                "    print(json.dumps({'id': 'task-123', 'status': 'running'}))",
+                "    sys.exit(0)",
+                "",
+                "if args[1] == 'show':",
+                "    task_id = args[2] if len(args) > 2 else ''",
+                "    if task_id == 'task-123':",
+                "        print(json.dumps({'id': task_id, 'status': 'running'}))",
+                "    sys.exit(0)",
+                "",
+                "if args[1] == 'complete':",
+                "    print(json.dumps({'id': args[2], 'status': 'completed'}))",
+                "    sys.exit(0)",
+                "",
+                "print('unsupported subcommand', file=sys.stderr)",
+                "sys.exit(2)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return bin_dir, log_file
+
+
+def read_fake_hermes_log(log_file: Path) -> list[list[str]]:
+    """Decode the fake Hermes argv log written as concatenated JSON arrays."""
+    text = log_file.read_text().strip()
+    if not text:
+        return []
+    decoder = json.JSONDecoder()
+    entries: list[list[str]] = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index >= len(text):
+            break
+        entry, end = decoder.raw_decode(text, index)
+        entries.append(entry)
+        index = end
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if text.startswith("\\n", index):
+            index += 2
+    return entries
+
+
 def test_version(mock_repo_root: Path) -> None:
     result = run_hb(["--version"], mock_repo_root)
     assert result.returncode == 0
@@ -271,7 +348,7 @@ def test_bridge_dispatch_apply_requires_backend_and_queue_file(mock_repo_root: P
         env=env,
     )
     assert missing_backend.returncode == 1
-    assert "backend local-file" in missing_backend.stderr.lower()
+    assert "choose a dispatch backend" in missing_backend.stderr.lower()
 
     missing_queue = run_hb(
         ["bridge", "dispatch", "--apply", "--backend", "local-file"],
@@ -338,6 +415,80 @@ def test_bridge_dispatch_apply_marks_bead_not_ready(mock_repo_root: Path) -> Non
     assert bead_id not in {item["id"] for item in ready_data}
     bead = show_bead(mock_repo_root, bead_id)
     assert bead["status"] == "in_progress"
+
+
+def test_bridge_dispatch_apply_hermes_cli_backend_writes_link_after_success(mock_repo_root: Path) -> None:
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    bead_id = create_ready_bead(mock_repo_root, "Hermes CLI backend task")
+    bead_before = show_bead(mock_repo_root, bead_id)
+    bin_dir, log_file = install_fake_hermes(mock_repo_root)
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_HERMES_LOG": str(log_file),
+    }
+
+    result = run_hb(
+        [
+            "bridge",
+            "dispatch",
+            "--apply",
+            "--backend",
+            "hermes-cli",
+        ],
+        mock_repo_root,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["backend"] == "hermes-cli"
+    assert payload["applied"] is True
+    assert len(payload["tasks"]) == 1
+    assert payload["tasks"][0]["id"] == "task-123"
+    assert payload["tasks"][0]["status"] == "running"
+    log_entries = read_fake_hermes_log(log_file)
+    assert log_entries[0][0:4] == ["kanban", "create", f"{bead_id}: Hermes CLI backend task", "--body"]
+    assert log_entries[0][-1] == "--json"
+    body = json.loads(log_entries[0][log_entries[0].index("--body") + 1])
+    assert body["bead_id"] == bead_id
+    assert log_entries[1] == ["kanban", "show", "task-123", "--json"]
+    bead_after = show_bead(mock_repo_root, bead_id)
+    assert bead_after["metadata"]["hermes_kanban_task_id"] == "task-123"
+    assert bead_after["status"] == "in_progress"
+    assert bead_before["metadata"].get("hermes_kanban_task_id") is None
+
+
+def test_bridge_dispatch_apply_hermes_cli_failure_leaves_bead_metadata_unchanged(mock_repo_root: Path) -> None:
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    bead_id = create_ready_bead(mock_repo_root, "Hermes CLI failure task")
+    bead_before = show_bead(mock_repo_root, bead_id)
+    bin_dir, log_file = install_fake_hermes(mock_repo_root, fail_create=True)
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_HERMES_LOG": str(log_file),
+        "FAKE_HERMES_CREATE_FAIL": "1",
+    }
+
+    result = run_hb(
+        [
+            "bridge",
+            "dispatch",
+            "--apply",
+            "--backend",
+            "hermes-cli",
+        ],
+        mock_repo_root,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "create failed before mutation" in result.stderr
+    log_entries = read_fake_hermes_log(log_file)
+    assert log_entries[0][0:4] == ["kanban", "create", f"{bead_id}: Hermes CLI failure task", "--body"]
+    assert log_entries[0][-1] == "--json"
+    bead_after = show_bead(mock_repo_root, bead_id)
+    assert bead_after["metadata"] == bead_before["metadata"]
+    assert bead_after["status"] == bead_before["status"]
 
 
 def test_result_sync_success_operations(mock_repo_root: Path, tmp_path: Path) -> None:
