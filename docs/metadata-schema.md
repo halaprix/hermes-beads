@@ -87,6 +87,21 @@ And extracting:
 
 `metadata.hermes_iteration` starts at `0` or is absent for first attempts. When a bridge sync sees a failed or timed-out worker result, it prepares an update that increments the iteration by one and marks `hermes_status` as `failed`. The next dispatch can use that value to decide whether to retry, escalate, or ask for human review.
 
+The bridge only increments `hermes_iteration` once per result record — the same result file can be re-applied any number of times without inflating the counter. This guarantee is enforced by an idempotency token embedded in the result comment, described next.
+
+### Idempotency Marker in Comments
+
+When the bridge writes a result back to a bead, the comment body begins with a stable marker line:
+
+```
+hermes-beads-op: <bead_id>-<sha256_prefix>
+<result | failed>: <summary>
+```
+
+The marker is the bridge's contract that the mutation has been applied to this bead. Agents MUST treat the marker as the source of truth for "already applied" — do not rely on iteration counts or close status alone, since those can be set by other paths.
+
+The op ID is the bead ID, a hyphen, and the first 8 hex characters of `SHA-256(bead_id + "\n" + dispatch_id + "\n" + status + "\n" + summary)`. The fields are joined with literal newline characters (`\n`, ASCII 0x0A). The full formula and re-run behavior are documented in `docs/kanban-bridge.md`.
+
 ### Packet Shape (JSON)
 
 ```json

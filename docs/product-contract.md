@@ -56,51 +56,63 @@ hb bridge sync-results --results-file <file> --apply         # mutates Beads
 
 | Operation | bd command | Effect |
 |-----------|------------|--------|
-| `comment` | `bd comments add <id> "result: …"` | Writes execution outcome as a comment on the bead |
+| `comment` | `bd comments add <id> "<marker>\n<result | failed>: <summary>"` | Writes execution outcome as a comment on the bead; first line is the idempotency marker |
 | `close` | `bd close <id> --reason "…"` | Closes the bead (success path only) |
 | `update-metadata` | `bd update <id> --set-metadata key=value` | Updates `hermes_status` and `hermes_iteration` |
 
 ### Idempotency Requirements
 
 Re-running `sync-results --apply` with the **same** results file **must not** produce duplicate
-comments, duplicate state transitions, or broken invariants.
+comments, duplicate state transitions, or broken invariants. This is enforced by an operation
+marker embedded in every result comment.
 
-**Requirement (not yet implemented — Phase 3):**
+**Requirement (implemented — v1.0.1+):**
 
 ```
 Upon applying a result comment, the bridge writes a unique operation identifier
-into the comment body so that a dry-run (or subsequent apply) can detect that this
-result was already processed and skip it.
+into the first line of the comment body so that a dry-run (or subsequent apply)
+can detect that this result was already processed and skip it.
 
-Format: result: <summary>  [op:sync-<bead-id>-<result-hash>-<seq>]
+Format: hermes-beads-op: <bead_id>-<sha256_prefix>
 ```
 
-Until operation IDs are implemented, the contract is:
+The full op-id formula and re-run behavior are specified in §7. The high-level guarantees are:
 
-1. **Re-running a success result** creates a duplicate comment on the bead and a second
-   `bd close` attempt. `bd close` on an already-closed bead may succeed silently or may emit a
-   warning — this is backend-dependent and NOT guaranteed idempotent.
-2. **Re-running a failure result** creates a duplicate failure comment and *increments
-   `hermes_iteration` again*, which corrupts retry accounting.
+1. **Re-running a success result** is a no-op: the op ID is detected in the existing comment, the
+   bridge emits a `skipped` operation with reason `"already applied"`, and no `bd close` is
+   issued. The bead stays closed exactly once.
+2. **Re-running a failure result** is a no-op for the iteration counter: the op ID is detected,
+   the bridge skips the result, and `hermes_iteration` is not incremented a second time.
+3. **Mixed re-runs** (a results file where some records have been applied and some are new) apply
+   only the new records; already-applied records are skipped.
 
-**Therefore, `sync-results --apply` MUST NOT be called with the same results file more than
-once until Phase 3 is implemented.** This is enforced by the roadmap ordering: Phase 3
-(result-sync idempotency) must be complete before live dispatch (Phase 5) enables scenarios
-where a single results file could be synced more than once.
+Dry-run and apply use the same emission logic (`build_result_sync_operations`), so the
+dry-run output exactly predicts the apply behavior, including the `"already applied"` skips.
 
-### Comment Markers (Concept)
+### Comment Markers (Current)
 
-Even though operation IDs are not yet implemented, the contract reserves the following
-comment-body conventions for future use:
+The comment body for a result or failure begins with the marker line, followed by a
+status line:
 
-- `result: <summary>` — success result from kanban execution
-- `failed: <summary>` — failure result with error summary
-- `result: <summary>  [op:sync-<bead-id>-<result-hash>-<seq>]` — future idempotent result marker
-- `failed: <summary>  [op:sync-<bead-id>-<result-hash>-<seq>]` — future idempotent failure marker
+```
+hermes-beads-op: <bead_id>-<sha256_prefix>
+result: <summary>
+```
 
-The `[op:sync-<bead-id>-<result-hash>-<seq>]` suffix is the unique operation identifier. When it is absent (current
-behavior), the bridge can only distinguish operations by the comment text itself, which is
-ambiguous when the same result file is re-processed.
+```
+hermes-beads-op: <bead_id>-<sha256_prefix>
+failed: <summary>
+```
+
+The marker is the bridge's contract that the mutation has been applied. Downstream agents and
+tooling that read result comments MUST treat the marker as the source of truth for "already
+applied", not the comment text or close status alone (those can be set by other paths).
+
+> **Format deviation from v1.0.1 reserved marker.** v1.0.1 reserved a `[op:sync-<bead-id>-<result-hash>-<seq>]`
+> suffix on the same line as `result:` / `failed:`. The shipped format uses a separate
+> `hermes-beads-op:` prefix line and omits the sequence number. This is an additive change
+> (the `result:` / `failed:` prefix lines still parse the same), but consumers that grep for
+> the literal `[op:sync-` pattern need to be updated.
 
 ## 3. Future Live Mutation Paths
 
@@ -212,51 +224,91 @@ and cron reports — MUST be public-safe:
 
 Enforcement: `scripts/scan-privacy.sh` runs as a pre-commit and CI gate.
 
-## 7. Result Operation IDs (Phase 3)
+## 7. Result Operation IDs
 
-> This section defines the concept. Implementation is deferred to Phase 3 (see ROADMAP.md).
+> This section is the authoritative spec for the operation-id mechanism. It corresponds to
+> the v1.0.1+ implementation in `src/hermes_beads/result_ops.py`. The earlier draft
+> reserved a `[op:sync-<bead-id>-<result-hash>-<seq>]` suffix; see the deviation note in §2
+> for the relationship between the reserved and shipped formats.
 
 ### Comment Markers
 
-Each result-sync operation that writes a comment should include a stable, unique operation
-identifier as a `[op:…]` suffix in the comment body:
+Every result-sync comment starts with a stable, unique operation identifier on its own line:
 
 ```
-result: Task completed successfully  [op:sync-20260612-abc123]
-failed: Worker timed out              [op:sync-20260612-def456]
+hermes-beads-op: <bead_id>-<sha256_prefix>
+result: <summary>
 ```
+
+```
+hermes-beads-op: <bead_id>-<sha256_prefix>
+failed: <summary>
+```
+
+The marker is parsed by the regex `hermes-beads-op:\s*(\S+)`, defined in
+`src/hermes_beads/result_ops.py` (`_OP_MARKER_RE` / `parse_op_marker`). It tolerates any
+non-whitespace token after the colon and matches on the first line of the comment, but the
+bridge always emits the marker as the first line.
 
 ### Op ID Generation
 
-The operation ID is generated from public-safe result content, never from local file paths:
+The op ID is the bead ID, a hyphen, and the first 8 hex characters of SHA-256 over four
+newline-joined fields:
 
-- The bead ID
-- The dispatch/task ID when present
-- The normalized result status
-- A hash of the normalized summary/body fields
-- A monotonic sequence number within the parsed results payload when needed to break ties
+```
+op_id = "<bead_id>" + "-" + SHA-256(bead_id + "\n" + dispatch_id + "\n" + status + "\n" + summary)[:8]
+```
 
-Format: `[op:sync-<bead-id>-<result-hash>-<seq>]`
+| Field | Source | Notes |
+|-------|--------|-------|
+| `bead_id` | Result record's `bead_id` (or `source_bead_id` fallback) | E.g. `hb-abc` |
+| `dispatch_id` | Result record's `dispatch_id` | Defaults to `"unknown"` if absent |
+| `status` | Normalized status | `completed` for `completed` / `success` / `done`; `failed` otherwise |
+| `summary` | Result record's `summary` | Free text, may be empty |
+
+The separator between the four fields is a single literal newline character (`\n`, ASCII
+0x0A). The 8-hex-character truncation is intentional: it gives 32 bits of collision space,
+which is sufficient for the "already applied within one Beads workspace" check. The same
+four inputs always produce the same op ID — the ID is a stable hash, not a random UUID.
+
+The op ID is derived purely from the result record content, never from local file paths,
+timestamps, or other non-public-safe inputs. This means the op ID can be re-computed from
+the result file alone and matched against prior comments without re-running the bridge.
 
 ### Deduplication on Re-run
 
-When `sync-results --apply` (or its dry-run equivalent) encounters an existing comment on the
-target bead that contains a matching `[op:…]` suffix, it MUST skip that operation. This makes
-re-running the same results file a true no-op.
+`build_result_sync_operations` accepts an optional `existing_comments` mapping (bead ID →
+list of comment dicts). On every invocation, the bridge:
 
-### Ambiguity Without Op IDs
+1. For each result record, computes the op ID from the formula above.
+2. Scans the bead's existing comments and extracts any op IDs (using `parse_op_marker`).
+3. If the freshly-computed op ID is already in the set of seen op IDs, the bridge emits
+   a `skipped` operation with reason `"already applied"` and does not write a comment, close,
+   or update-metadata operation for that record.
+4. Otherwise, the bridge proceeds with the normal emission (comment + close for `completed`,
+   comment + update-metadata for `failed`).
 
-Without operation IDs (current v1.0.1 behavior), the bridge has no reliable way to tell
-whether a given result was already processed. Comment body matching is fragile because the
-`summary` text may vary between runs, and multiple comments with identical bodies are valid
-(e.g., two different workers both succeeded on the same task type).
+This makes re-running the same results file a true no-op: no duplicate comments, no
+duplicate `bd close` calls, and no double-increment of `hermes_iteration`. A partial re-run
+(where the file mixes new and old records) applies only the new records and skips the rest;
+the two cases do not interfere.
 
-### Breaking Change Warning
+### Why the Marker Lives in the Comment Body
 
-Adding operation IDs to comment bodies changes the comment format. Any downstream tooling that
-parses result comments by body text alone must be updated to ignore the `[op:…]` suffix. The
-change is additive: `[op:…]` is appended to the existing body format, so simple string matching
-against `result:` and `failed:` prefixes still works.
+The marker is a property of the **mutation**, not of the bead state. A `hermes_iteration`
+counter or a `close` status can be set by other paths (manual `bd close`, a different
+worker, an admin tool); the comment marker is the only signal the bridge owns end-to-end.
+This is also why the bridge uses the marker rather than the close status for
+"already applied" detection: close status can be set without the bridge having run.
+
+### Breaking Change Note (Format Evolution)
+
+The v1.0.1 contract reserved an `[op:sync-<bead-id>-<result-hash>-<seq>]` suffix on the
+same line as the `result:` / `failed:` body. The shipped format uses a separate
+`hermes-beads-op:` prefix line and does not include a sequence number. This is an additive
+change to the comment body — the `result:` and `failed:` prefixes still parse identically —
+but consumers that grep for the literal `[op:sync-` pattern need to be updated to match
+`hermes-beads-op:` instead.
 
 ## 8. Roadmap Connection
 
@@ -264,20 +316,28 @@ The product contract phases align with the roadmap stages in [`ROADMAP.md`](road
 
 | Phase | Document section | Implementation bead | Status |
 |-------|-----------------|-------------------|--------|
-| Phase 1 | This document | hb-ip5.2 | Current |
-| Phase 3 | §7 Result Operation IDs | hb-ipx.x | Planned |
-| Phase 4 | §5 Local-File Backend | hb-ipx.x | Planned |
-| Phase 5 | §5 Hermes Kanban Backend | hb-ipx.x | Planned |
-| Phase 6 | §3 Bridge Tick | hb-ipx.x | Planned |
+| Phase 1 | This document | hb-ip5.2 | Done (v1.0.1) |
+| Phase 2 | §5 Local-File Backend, §5 Hermes Kanban Backend | hb-ipx.x | Done (v1.0.1 — package + dry-run commands) |
+| Phase 3 | §7 Result Operation IDs, §10 Retry Policy | hb-b88.4 (op-id) + hb-b88.8 (docs) | Done (v1.0.1+) |
+| Phase 4 | §5 Local-File Backend dispatch path | hb-b88.x | Planned |
+| Phase 5 | §5 Hermes Kanban Backend | hb-b88.x | Planned |
+| Phase 6 | §3 Bridge Tick | hb-b88.x | Planned |
+
+The Phase 3 work landed as: (a) `result_ops.py` exposing `build_op_id` and `parse_op_marker`,
+(b) `cli.py` wiring the marker into the `comment` op body and reading prior comments for
+dedup, (c) `tests/test_result_ops.py` covering the formula and the parser, and (d) the docs
+you are reading now.
 
 ## 9. Non-Goals and Unsupported
 
 ### Non-Goals
 
 - **Beads as orchestration engine.** Beads stores durable state and routing hints; it does not
-  schedule agents, manage concurrency, or implement retry policies.
-- **Distributed consensus.** The bridge runs in a single Hermes controller environment. There is
-  no leader election, distributed locking, or consensus protocol.
+  schedule agents, manage concurrency, or implement retry policies. The retry policy in §10
+  is a comment-marker / iteration-counter contract enforced by the bridge; the *dispatch*
+  retry decision itself remains the dispatcher's responsibility.
+- **Distributed consensus.** The bridge runs in a single Hermes controller environment. There
+  is no leader election, distributed locking, or consensus protocol.
 - **Real-time synchronization.** The bridge operates on a polling model (Phase 6 default: every
   10 minutes). Sub-minute synchronization is not a goal.
 - **Edit-in-place from dashboard.** Dashboards are read-only observability surfaces.
@@ -288,9 +348,74 @@ The product contract phases align with the roadmap stages in [`ROADMAP.md`](road
 
 ### Unsupported Operations
 
-- **`hb bridge dispatch --apply`** without completing Phase 3 first (result-sync idempotency).
+- **`hb bridge dispatch --apply`** without first having local-file and/or Hermes Kanban backend
+  implementations (Phase 4 / Phase 5). Idempotency for dispatch is covered by the
+  `hermes_kanban_task_id` rule in §3, independent of result-sync idempotency.
 - **Live cron tick** without completing Phase 4 and Phase 5 (local and Hermes backends).
 - **Cross-machine Beads sync** without explicit `bd dolt pull/push` — the bridge does not
   implement its own sync protocol.
 - **Direct `.beads/issues.jsonl` manipulation** — hb commands read and write only through
   the `bd` CLI.
+
+## 10. Retry Policy
+
+The bridge defines a contract for how result records map to mutations of retry bookkeeping
+on the bead. The contract is enforced by the `sync-results` apply path and is observable
+through the comment marker, the `hermes_status` metadata field, and the `hermes_iteration`
+counter.
+
+### What Counts as a Retry
+
+A "retry" is a second (or later) attempt to execute the same bead, triggered by a worker
+failure. The contract makes this observable by:
+
+- Incrementing `metadata.hermes_iteration` by exactly **one** per failed result record.
+- Setting `metadata.hermes_status` to `failed` whenever a result record has `status: failed`.
+- Closing the bead (status `completed`) on a success result record.
+
+### Per-Result-Record Idempotency
+
+A given `(bead_id, dispatch_id, status, summary)` tuple mutates the bead at most one time,
+no matter how many times `sync-results --apply` is invoked with the same input. This is
+guaranteed by the operation marker (§7):
+
+- The first time a result record is applied, the bridge writes a comment whose first line is
+  `hermes-beads-op: <op_id>`, then performs the close or update-metadata op.
+- On every subsequent invocation, the bridge reads existing comments, finds the same op ID
+  via `parse_op_marker`, and emits a `skipped` operation with reason `"already applied"`.
+  The bead is **not** closed a second time, and `hermes_iteration` is **not** incremented a
+  second time.
+
+### Partial Re-runs
+
+A result file can mix new and old records. The bridge applies only the new ones; old ones
+are skipped independently. The dry-run output lists both kinds of operation, with the
+`skipped` operations labelled with the reason, so operators can confirm before applying
+that exactly the right records will be applied.
+
+### Dispatch-Side Retry Decisions
+
+The bridge does **not** decide when to retry. That is the dispatcher's responsibility,
+and the only signal the bridge provides is `hermes_iteration` and `hermes_status`. The
+recommended dispatcher policy is:
+
+| `hermes_status` | `hermes_iteration` | Suggested action |
+|-----------------|--------------------|------------------|
+| absent or `ready` | 0 | First dispatch — no prior attempt. |
+| `failed` | 1 | First retry — same bead, fresh worker. |
+| `failed` | 2 | Second retry — consider escalation, profile change, or human review. |
+| `failed` | ≥ 3 | Stop retrying automatically; require human review. |
+| `in_progress` | any | Do not dispatch; an in-flight attempt exists. |
+| `completed` | any | Bead is closed; no dispatch needed. |
+
+These are recommendations, not contract — the bridge guarantees that `hermes_iteration`
+and `hermes_status` are consistent with the comment marker, but it does not choose a
+threshold for "too many retries". Dispatchers and operators are free to set their own
+escalation policy.
+
+### Failure Detection Boundary
+
+The bridge treats any result record whose `status` is not `completed` / `success` / `done`
+as a failure. It does not interpret error types, retryable vs. non-retryable classifications,
+or transient vs. permanent causes. The `summary` field is the worker's only feedback channel
+to the dispatcher, and the bridge preserves it verbatim in the comment.
