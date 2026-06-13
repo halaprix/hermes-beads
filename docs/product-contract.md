@@ -193,8 +193,14 @@ Kanban. It is the **test harness** for the bridge contract:
 
 **Boundary:** the local-file backend MUST implement the same operation interface as the Hermes
 Kanban backend. Switching backends should be a configuration change, not a code change to
-dispatch/sync logic. The backend is injected via an abstraction (currently implicit in
-`build_kanban_payload` + `build_result_sync_operations`; may become a formal plugin interface).
+dispatch/sync logic. The backend is injected via a formal dispatch plan boundary:
+
+- `DispatchOp` records describe the work to do (`create` or `skipped`).
+- `build_dispatch_plan(...)` decides the operation list without mutating Beads, local files, or Hermes Kanban.
+- A dispatch backend replays the planned `create` operations via `create(payload) -> task_id`.
+- Optional `show(...)` and `complete(...)` methods let the same backend participate in result-sync flows, but dispatch planning does not call them.
+
+`hb bridge dispatch --dry-run` currently uses this planner and prints planned create payloads only. Later `--apply` work must execute the same operation list that dry-run emitted; it must not re-plan against fresh Beads state and silently diverge from the preview.
 
 ### Hermes Kanban Backend (Phase 5)
 

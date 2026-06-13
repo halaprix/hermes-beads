@@ -129,6 +129,33 @@ def test_bridge_dispatch_dry_run_maps_ready_beads(mock_repo_root: Path) -> None:
     assert json.loads(task["body"])["bead_id"] == "hb-fup"
 
 
+def test_bridge_dispatch_preserves_handoff_comments(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-fup", title="Bridge task")]),
+        "HB_MOCK_BD_COMMENTS_JSON": json.dumps(
+            [
+                {
+                    "bead_id": "hb-fup",
+                    "author": "agent",
+                    "body": "handoff: keep context",
+                    "created_at": "2026-06-12T12:00:00Z",
+                }
+            ]
+        ),
+    }
+    result = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    body = json.loads(data["tasks"][0]["body"])
+    assert body["comments"] == [
+        {
+            "author": "agent",
+            "body": "handoff: keep context",
+            "created_at": "2026-06-12T12:00:00Z",
+        }
+    ]
+
+
 def test_bridge_dispatch_empty_queue_is_success(mock_repo_root: Path) -> None:
     env = {"HB_MOCK_BD_READY_JSON": "[]"}
     result = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root, env=env)

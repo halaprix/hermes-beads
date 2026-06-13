@@ -36,6 +36,17 @@ Bridge design and API surface. No live execution.
 ### Phase 2
 Implemented as `hb bridge dispatch --dry-run`. It reads `bd ready --json`, builds handoff packets, and prints the Hermes Kanban payloads it would create. Live dispatch remains guarded until the controller enables it explicitly.
 
+#### Dispatch Planner and Backend Protocol
+
+Dispatch planning is split from the Click command in `src/hermes_beads/dispatch_ops.py`:
+
+- `DispatchOp` is the immutable operation record emitted by the planner. Current operation kinds are `create` and `skipped`.
+- `build_dispatch_plan(ready_beads, backend=None, payload_builder=None)` maps ready bead dictionaries into `DispatchOp` records without calling Click, `bd`, network APIs, or backend mutation methods.
+- `DispatchBackend` defines the future backend contract. The minimum dispatch-apply surface is `create(payload) -> task_id`; `show(task_id)` and `complete(task_id, status, summary)` are reserved for backends that also serve result-sync flows.
+- `kanban_payload_for_bead(bead)` is the IO-free default payload builder used by unit tests. The CLI injects its existing richer `build_kanban_payload` wrapper so `bridge dispatch --dry-run` still emits full handoff bodies, including comments gathered from Beads.
+
+This preserves the no-live-mutation contract for this phase: the planner describes what dispatch would do, and the CLI prints the planned create payloads. No backend `create` call happens until a later `--apply` bead adds the local-file backend.
+
 ### Phase 3
 Implemented as `hb bridge sync-results --dry-run --results-file <file>`. It maps completed/failed Hermes Kanban result records back into Beads comment/close/metadata operations. Live mutation remains guarded until the controller enables it explicitly.
 

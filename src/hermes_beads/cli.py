@@ -16,6 +16,10 @@ from typing import Any
 import click
 
 from hermes_beads.bd_helpers import check_bd_available, run_bd, run_bd_json
+from hermes_beads.dispatch_ops import (
+    DispatchOpKind,
+    build_dispatch_plan,
+)
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -165,7 +169,14 @@ def explain_profile_selection(bead: dict[str, Any]) -> tuple[str, str]:
 
 
 def build_kanban_payload(bead: dict[str, Any]) -> dict[str, Any]:
-    """Map a ready bead to a Hermes Kanban task payload."""
+    """Map a ready bead to a Hermes Kanban task payload.
+
+    This wrapper preserves the existing CLI dry-run wire format by
+    building the full handoff packet, including comments gathered from
+    Beads. The pure planner in :mod:`hermes_beads.dispatch_ops` can use
+    an IO-free payload builder for unit tests, while the Click adapter
+    injects this richer builder for CLI output compatibility.
+    """
     packet = build_handoff_packet(bead)
     bead_id = packet["bead_id"]
     profile = select_profile(bead)
@@ -315,13 +326,19 @@ def bridge() -> None:
 @bridge.command("dispatch")
 @click.option("--dry-run", is_flag=True, help="Print planned Kanban payloads without side effects")
 def bridge_dispatch(dry_run: bool) -> None:
-    """Map ready beads to Hermes Kanban task payloads."""
+    """Map ready beads to Hermes Kanban task payloads.
+
+    Planning logic lives in :mod:`hermes_beads.dispatch_ops`; this
+    command is a thin Click/IO adapter that delegates to the pure
+    planner. Apply (live dispatch) is not implemented in this bead.
+    """
     if not dry_run:
         click.echo("Error: live dispatch is not implemented; use --dry-run", err=True)
         sys.exit(1)
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
         check_bd_available()
-    tasks = [build_kanban_payload(bead) for bead in get_ready_beads()]
+    plan = build_dispatch_plan(get_ready_beads(), payload_builder=build_kanban_payload)
+    tasks = [op.payload for op in plan if op.kind is DispatchOpKind.CREATE]
     click.echo(json.dumps({"tasks": tasks}, indent=2))
 
 
