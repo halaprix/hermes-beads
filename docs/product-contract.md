@@ -221,7 +221,7 @@ dispatch/sync logic. The backend is injected via a formal dispatch plan boundary
 - A dispatch backend replays the planned `create` operations via `create(payload) -> task_id`.
 - Optional `show(...)` and `complete(...)` methods let the same backend participate in result-sync flows, but dispatch planning does not call them.
 
-`hb bridge dispatch --dry-run` currently uses this planner and prints planned create payloads only. Later `--apply` work must execute the same operation list that dry-run emitted; it must not re-plan against fresh Beads state and silently diverge from the preview.
+`hb bridge dispatch --dry-run` currently uses this planner and prints planned create payloads only. `hb bridge dispatch --apply --backend local-file --queue-file <path>` replays the same plan into the deterministic JSON queue. Later backends must execute the same operation list that dry-run emitted; they must not re-plan against fresh Beads state and silently diverge from the preview.
 
 ### Hermes Kanban Backend (Phase 5)
 

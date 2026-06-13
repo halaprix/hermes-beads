@@ -163,6 +163,85 @@ def test_bridge_dispatch_empty_queue_is_success(mock_repo_root: Path) -> None:
     assert json.loads(result.stdout) == {"tasks": []}
 
 
+def test_bridge_dispatch_apply_local_file_creates_queue_file(mock_repo_root: Path, tmp_path: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-apply", title="Apply task")])}
+    queue_file = Path(".hermes-beads/dispatch.json")
+
+    result = run_hb(
+        [
+            "bridge",
+            "dispatch",
+            "--apply",
+            "--backend",
+            "local-file",
+            "--queue-file",
+            str(queue_file),
+        ],
+        mock_repo_root,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["applied"] is True
+    assert data["backend"] == "local-file"
+    assert data["queue_file"].endswith(".hermes-beads/dispatch.json")
+    queue_path = mock_repo_root / queue_file
+    assert queue_path.exists()
+    queue = json.loads(queue_path.read_text())
+    assert len(queue["tasks"]) == 1
+    assert queue["tasks"][0]["payload"]["source_bead_id"] == "hb-apply"
+
+
+def test_bridge_dispatch_apply_local_file_is_idempotent(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-dup", title="Duplicate task")])}
+    queue_file = Path(".hermes-beads/dispatch.json")
+    args = [
+        "bridge",
+        "dispatch",
+        "--apply",
+        "--backend",
+        "local-file",
+        "--queue-file",
+        str(queue_file),
+    ]
+
+    first = run_hb(args, mock_repo_root, env=env)
+    second = run_hb(args, mock_repo_root, env=env)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    queue_path = mock_repo_root / queue_file
+    queue = json.loads(queue_path.read_text())
+    assert len(queue["tasks"]) == 1
+    assert queue["tasks"][0]["payload"]["source_bead_id"] == "hb-dup"
+
+
+def test_bridge_dispatch_apply_matches_dry_run_payloads(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-plan", title="Parity task")])}
+    queue_file = Path(".hermes-beads/dispatch.json")
+    dry_run = run_hb(["bridge", "dispatch", "--dry-run"], mock_repo_root, env=env)
+    apply_run = run_hb(
+        [
+            "bridge",
+            "dispatch",
+            "--apply",
+            "--backend",
+            "local-file",
+            "--queue-file",
+            str(queue_file),
+        ],
+        mock_repo_root,
+        env=env,
+    )
+
+    assert dry_run.returncode == 0, dry_run.stderr
+    assert apply_run.returncode == 0, apply_run.stderr
+    dry_tasks = json.loads(dry_run.stdout)["tasks"]
+    applied_tasks = json.loads(apply_run.stdout)["tasks"]
+    assert [task["payload"] for task in applied_tasks] == dry_tasks
+
+
 def test_result_sync_success_operations(mock_repo_root: Path, tmp_path: Path) -> None:
     results_file = tmp_path / "results.json"
     results_file.write_text(json.dumps([{"bead_id": "hb-xaz", "status": "completed", "summary": "ok"}]))

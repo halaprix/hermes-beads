@@ -20,6 +20,7 @@ from hermes_beads.dispatch_ops import (
     DispatchOpKind,
     build_dispatch_plan,
 )
+from hermes_beads.local_file_backend import LocalFileQueueBackend
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -325,21 +326,54 @@ def bridge() -> None:
 
 @bridge.command("dispatch")
 @click.option("--dry-run", is_flag=True, help="Print planned Kanban payloads without side effects")
-def bridge_dispatch(dry_run: bool) -> None:
+@click.option("--apply", "apply_ops", is_flag=True, help="Write planned tasks to a local-file queue")
+@click.option("--backend", type=click.Choice(["local-file"]), default=None, help="Dispatch backend to use when applying")
+@click.option("--queue-file", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Queue file for the local-file backend")
+def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_file: Path | None) -> None:
     """Map ready beads to Hermes Kanban task payloads.
 
     Planning logic lives in :mod:`hermes_beads.dispatch_ops`; this
     command is a thin Click/IO adapter that delegates to the pure
-    planner. Apply (live dispatch) is not implemented in this bead.
+    planner. Dry-run stays JSON-only. Apply is supported only for the
+    local-file backend, which writes deterministic queue records to a
+    JSON file.
     """
-    if not dry_run:
-        click.echo("Error: live dispatch is not implemented; use --dry-run", err=True)
+    if dry_run == apply_ops:
+        click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
         check_bd_available()
     plan = build_dispatch_plan(get_ready_beads(), payload_builder=build_kanban_payload)
-    tasks = [op.payload for op in plan if op.kind is DispatchOpKind.CREATE]
-    click.echo(json.dumps({"tasks": tasks}, indent=2))
+    if dry_run:
+        tasks = [op.payload for op in plan if op.kind is DispatchOpKind.CREATE]
+        click.echo(json.dumps({"tasks": tasks}, indent=2))
+        return
+    if backend != "local-file":
+        click.echo("Error: --apply is only implemented for --backend local-file", err=True)
+        sys.exit(1)
+    if queue_file is None:
+        click.echo("Error: --queue-file is required for --backend local-file", err=True)
+        sys.exit(1)
+    queue_backend = LocalFileQueueBackend(queue_file, project_root=Path.cwd())
+    applied_tasks: list[dict[str, Any]] = []
+    for op in plan:
+        if op.kind is not DispatchOpKind.CREATE:
+            continue
+        task_id = queue_backend.create(op.payload)
+        task = queue_backend.show(task_id)
+        if task is not None:
+            applied_tasks.append(task)
+    click.echo(
+        json.dumps(
+            {
+                "backend": "local-file",
+                "queue_file": str(queue_backend.queue_file),
+                "applied": True,
+                "tasks": applied_tasks,
+            },
+            indent=2,
+        )
+    )
 
 
 @bridge.command("sync-results")
