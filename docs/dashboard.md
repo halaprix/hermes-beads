@@ -2,75 +2,83 @@
 
 ## Overview
 
-The future hermes-beads dashboard should show the live relationship between durable Beads project state and Hermes execution state. It is an observability surface, not a second source of truth.
+`hb dashboard build` renders a static, read-only project snapshot from Beads issue data. It is an observability surface, not a control plane and not a second source of truth.
 
-## Goals
+## Command
 
-- Show ready, running, blocked, failed, and closed beads
-- Show which Hermes profile is working on each bead
-- Show bridge lag between Beads and Hermes Kanban
-- Show failed tasks and retry counts
-- Expose a debug view with raw public-safe packet data
+```bash
+hb dashboard build --output dashboard.html
+hb dashboard build --dry-run --output dashboard.html
+```
 
-## Views
+Dry-run prints the collected public-safe JSON. Apply writes a static HTML file.
 
-### Project State
+## Data collectors
 
-- Count of open, ready, blocked, and closed beads
-- Dependency graph summary
-- Recently updated beads
-- Ready queue ordered by priority
+The collector in `src/hermes_beads/dashboard.py` accepts Beads issue dictionaries and optional Hermes Kanban task dictionaries. It intentionally copies only public summary fields:
 
-### Agent Health
+- bead ID
+- title
+- status
+- priority
+- issue type
+- assignee/owner
+- labels
+- selected `hermes_*` metadata
+- linked Kanban task ID/status
 
-- Active Hermes workers
-- Current bead per worker
-- Last heartbeat or update time
-- Failure/retry count
+It does not persist data and does not copy descriptions, comments, raw handoff packets, environment values, or local machine paths.
 
-### Bridge Health
+## Rendered sections
 
-- Last dispatch run
-- Last result-sync run
-- Number of pending dispatch operations
-- Number of pending result-sync operations
+The HTML output has invariant sections rather than a brittle pixel-perfect layout:
 
-### Debug View
+- `Summary`
+- `Ready Work`
+- `All Work`
+- `Non-goals`
 
-The debug view can show:
+Tests assert these sections exist and that private-data patterns are rejected.
 
-- Handoff packet JSON
-- Kanban payload JSON
-- Planned result-sync operations
-- Bead metadata
+## Privacy boundaries
 
-The debug view must not show secrets, private IPs, local paths, or machine identifiers.
+The renderer blocks output containing private path, private network, token, or provider-key patterns. Unsafe input values are redacted before rendering when possible, and the final rendered document is scanned again.
 
-## Data Sources
+Forbidden examples:
 
-- `bd ready --json`
-- `bd list --json` when available
-- `bd show <id> --json`
-- Hermes Kanban task list/show commands
-- Bridge dry-run commands from `hb bridge dispatch --dry-run` and `hb bridge sync-results --dry-run`
+- absolute user-machine paths
+- private network addresses
+- GitHub token prefixes
+- provider key environment names
+- raw worker transcripts
 
-## Privacy Boundaries
+Allowed examples:
 
-The dashboard is allowed to display public project state only. It must not display:
+- bead IDs
+- public labels
+- public task titles
+- project-relative file names
+- redacted placeholders
 
-- Tokens or environment variables
-- Local filesystem paths
-- Private hostnames
-- Private network addresses
-- Full internal agent transcripts
+## Local serving workflow
 
-## Non-Goals
+The output is just a file, so use any static server:
 
-- Editing Beads state from the dashboard
-- Replacing Beads CLI
+```bash
+hb dashboard build --output dashboard.html
+python -m http.server 8000
+```
+
+Open the generated file in a browser or serve it from a local-only dashboard host.
+
+## Non-goals
+
+- Editing Beads state
+- Approving gates
+- Starting workers
 - Replacing Hermes Kanban
-- Real-time WebSocket implementation in the first version
+- Replacing `bd`
+- Live WebSocket updates
+- Storing historical dashboard snapshots
 
-## First Version
-
-The first implementation should be a read-only static or server-rendered page that refreshes on demand. The dashboard can be served alongside Hermes later, but the initial version should stay decoupled and easy to run locally.
+Future server-side dashboards can reuse the same collector and renderer, but mutation APIs should remain out of scope unless a separate reviewed control-plane design is accepted.

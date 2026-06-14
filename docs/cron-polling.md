@@ -2,66 +2,86 @@
 
 ## Overview
 
-The bridge can run as a periodic Hermes cron job once dispatch and result-sync commands are live. The cron job should be conservative: collect state, run dry-run checks first, then execute only explicitly enabled live operations.
+`hb bridge tick` is the cron-friendly bridge controller. It plans dispatch and result-sync work, applies it only when explicitly requested, uses a lockfile to avoid overlapping runs, and can stay silent on no-op ticks.
 
-## Loop
+## Commands
 
-A bridge polling tick performs:
+```bash
+hb bridge tick --dry-run
+hb bridge tick --apply --backend local-file --queue-file .hermes-beads/dispatch.json
+hb bridge tick --apply --backend hermes-cli
+```
 
-1. Sync local code and Beads state
-2. Dispatch newly ready beads to Hermes Kanban
-3. Sync completed or failed Kanban results back to Beads
-4. Push Beads state
-5. Stay quiet if nothing changed
+Useful safety flags:
 
-## Safe Schedule
+```bash
+--lock-file .hermes-beads/tick.lock
+--stale-after 3600
+--privacy-scan
+--git-pull
+--git-push
+--bd-pull
+--bd-push
+--silent-noop
+```
 
-Recommended initial schedule:
+## Tick order
+
+A live tick performs the following sequence:
+
+1. acquire lock, replacing it only if stale
+2. run optional privacy/git/Beads preflight sync
+3. dispatch ready, unlinked beads through the selected backend
+4. sync result records when `--results-file` is supplied
+5. run optional Beads/git push
+6. release lock
+7. print a public-safe summary unless `--silent-noop` suppresses empty work
+
+## Dry-run output
+
+Dry-run emits only operation counts and public backend names. It never prints environment values, private paths, tokens, raw comments, or raw worker logs.
+
+```json
+{
+  "operations": [
+    {"op": "dispatch", "count": 1, "backend": "local-file", "path": ".hermes-beads/dispatch.json"}
+  ],
+  "summary": {
+    "applied": false,
+    "noop": false,
+    "dispatch_count": 1,
+    "result_count": 0,
+    "backend": "local-file"
+  }
+}
+```
+
+## No-op policy
+
+Cron should usually use `--silent-noop`. When no ready beads and no result records exist, `hb bridge tick --dry-run --silent-noop` and `hb bridge tick --apply --silent-noop` emit no stdout.
+
+## Failure behavior
+
+- held non-stale lock: exit non-zero before mutation
+- stale lock: replace and continue
+- privacy scan failure: exit before dispatch
+- git/Beads pull failure: exit before dispatch
+- dispatch create failure: exit and leave Beads unchanged
+- post-create show failure: keep the Beads link/status mutation and return minimal task output
+- result-sync duplicate: emit `skipped` via the existing operation marker rules
+
+## Recommended Hermes cron prompt
+
+```text
+In the hermes-beads repository, run one bridge tick with `hb bridge tick --apply --backend local-file --queue-file .hermes-beads/dispatch.json --privacy-scan --silent-noop`. If the command produces output, summarize only the public-safe counts and failures. Do not create or modify cron jobs from inside this run.
+```
+
+## Schedule
+
+Start conservative:
 
 ```text
 every 10m
 ```
 
-The job should not schedule other cron jobs. Recursive scheduling is prohibited.
-
-## Dry-Run First
-
-Before enabling live mode, run:
-
-```bash
-hb bridge dispatch --dry-run
-hb bridge sync-results --dry-run --results-file /path/to/results.json
-```
-
-Live mode should only be enabled after these dry-runs produce expected operations.
-
-## Failure Behavior
-
-- If Beads sync fails: stop the tick and report the sync error
-- If dispatch fails: leave the bead open and comment the error when safe
-- If result sync fails: leave the Kanban task open so the next tick can retry
-- If privacy scan fails: do not push or dispatch
-
-## Privacy Rules
-
-Cron output delivered to chat must be concise and public-safe. Do not include:
-
-- Environment variables
-- Tokens
-- Local filesystem paths beyond project-relative paths
-- Private network addresses
-- Raw agent transcripts
-
-## Example Prompt
-
-A future Hermes cron prompt can be:
-
-```text
-In the hermes-beads repo, run the bridge tick: sync Beads state, dispatch ready beads, sync completed Kanban results, push Beads state. Stay silent if there is nothing to report. Never create cron jobs from inside this run.
-```
-
-## Open Questions
-
-- Whether live dispatch should be enabled by default or require a config flag
-- How often result sync should retry failed workers
-- Whether Telegram notifications should be sent only for failures or also for new dispatches
+Increase frequency only after the local-file backend and result-sync paths have passed repeated smoke tests.

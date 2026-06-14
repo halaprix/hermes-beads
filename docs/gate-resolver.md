@@ -41,9 +41,10 @@ This profile is then copied into the Kanban dispatch payload as the assignee.
 ## Resolution Rules
 
 1. If `metadata.hermes_profile` exists, use it.
-2. If labels include `docs`, use `docs`.
-3. If labels include `planning` or `architecture`, use `planner`.
-4. Otherwise, default to `ts-dev`.
+2. If `metadata.hermes_requires_review` is truthy or labels include `review`, `requires-review`, `pr-gated`, or `reviewer`, use `reviewer`.
+3. If labels include `docs`, use `docs`.
+4. If labels include `planning` or `architecture`, use `planner`.
+5. Otherwise, default to `ts-dev`.
 
 These rules are intentionally simple. More complex routing belongs in Hermes configuration, not in Beads metadata.
 

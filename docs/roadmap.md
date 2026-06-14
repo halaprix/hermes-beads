@@ -1,200 +1,107 @@
 # Roadmap
 
-## Overview
+## Current state
 
-hermes-beads bridges [Beads](https://github.com/gastownhall/beads) (a durable Dolt-backed task
-graph) into Hermes Agent workflows. The project is at **v1.0.1** (GitHub release only — PyPI and
-Hermes Agent upstream not yet published). This roadmap sequences remaining work based on review
-feedback from agy and Claude.
+hermes-beads is now at **v1.1.0a1** in this branch. The local bridge roadmap is implemented and locally verified:
 
-> **Review conclusions (applied to this plan):**
-> - agy: build and verify the local dispatch harness before wiring live/cron/dashboard/distribution.
-> - Claude (initial pass): failed under incomplete third-party env; succeeded once extraneous
->   env vars were unset. Key correction: **result-sync idempotency must be implemented before
->   live dispatch is enabled**, because `hb bridge sync-results --apply` already mutates Beads
->   and re-running it must be safe.
+- result-sync idempotency
+- local-file dispatch backend and temp-product smoke loop
+- real Hermes Kanban CLI backend and live smoke documentation
+- cron-friendly `hb bridge tick`
+- read-only static dashboard
+- advanced gate metadata, retry escalation, and reviewer routing
+- Trusted Publishing workflow and in-repository Hermes skill draft
+
+Package-index publication remains externally gated: TestPyPI and PyPI require configured Trusted Publishing environments or package-index credentials. Those publication beads are intentionally blocked rather than falsely closed.
 
 ## Sequencing
 
+```text
+Phase 0 ── Preflight compatibility gate ✓
+Phase 1 ── Product contract & roadmap docs ✓
+Phase 2 ── Installed package + bd preflight ✓ v1.0.1
+Phase 3 ── Result-sync idempotency ✓
+Phase 4 ── Local-file dispatch backend & temp-product smoke loop ✓
+Phase 5 ── Hermes Kanban backend ✓
+Phase 6 ── Bridge tick / cron controller ✓
+Phase 7 ── Read-only observability dashboard ✓
+Phase 8 ── Distribution: TestPyPI → PyPI → Hermes Agent upstream skill PR ⚠ externally gated
+Phase 9 ── Advanced gates / human approval ✓
 ```
-Phase 0 ── Preflight compatibility gate (done)
-Phase 1 ── Product contract & roadmap docs (current)
-Phase 2 ── Installed package + bd preflight (v1.0.1 done)
-Phase 3 ── Result-sync idempotency — before live dispatch
-Phase 4 ── Local-file dispatch backend & temp-product smoke loop
-Phase 5 ── Hermes Kanban backend (after local proves the contract)
-Phase 6 ── Bridge tick / cron controller
-Phase 7 ── Read-only observability dashboard
-Phase 8 ── Distribution: TestPyPI → PyPI → Hermes Agent upstream skill PR
-Phase 9 ── Advanced gates / human approval
-```
 
----
+## Implemented phases
 
-## Phase 0 — Preflight Compatibility Gate ✓ (done)
+### Phase 0 — Preflight Compatibility Gate
 
-> Beads setup modes and bd JSON output contract are defined and tested.
+Beads setup modes and bd JSON output contract are defined in [`docs/beads-compatibility.md`](beads-compatibility.md) and tested in `tests/test_compatibility.py`.
 
-The compatibility matrix in [`docs/beads-compatibility.md`](docs/beads-compatibility.md)
-catalogues supported/unsupported setup topologies, minimum bd version (1.0.0), and
-machine-readable output contract fields for `bd ready`, `show`, `comments`, and `context`.
-Automated smoke and contract tests live in `tests/test_compatibility.py`.
+### Phase 1 — Product Contract & Roadmap Docs
 
-**Phase gate:** matrix doc written, all 16 compatibility tests passing.
+The bridge authority model, mutation semantics, public-safety rules, release matrix, and GitBook navigation are documented and generated docs are checked in CI.
 
----
+### Phase 2 — Installed Package + bd Preflight
 
-## Phase 1 — Product Contract & Roadmap Docs (in progress)
+`v1.0.1` shipped the installable package baseline, CLI skeleton, package metadata, and non-editable install smoke. `v1.1.0a1` extends that package surface with the completed bridge commands.
 
-> Freeze the product contract before adding new live mutation paths.
+### Phase 3 — Result-Sync Idempotency
 
-- **hb-ip5.1** · Update ROADMAP.md to v1.0.1 product roadmap (this document)
-- **hb-ip5.2** · Add product contract doc for bridge authority and apply semantics
-- **hb-ip5.3** · Document release matrix and pre-PyPI gates
-- **hb-ip5.4** · Regenerate GitBook docs and add roadmap docs to navigation
-- **hb-ip5.6** · Beads setup compatibility matrix _(done — see Phase 0)_
+`hb bridge sync-results` writes stable `hermes-beads-op:` markers and re-running the same results file is a no-op. Failure result records increment `hermes_iteration` at most once per unique result.
 
-**Phase gate:** all child tasks closed; product-contract doc merged; docs generation passes.
+### Phase 4 — Local-File Dispatch Backend
 
----
+`hb bridge dispatch --apply --backend local-file` writes deterministic queue records, links beads, gates dispatched beads to `in_progress`, and is covered by integration smoke tests.
 
-## Phase 2 — Installed Package + bd Preflight ✓ (done as v1.0.1)
+### Phase 5 — Hermes Kanban Backend
 
-> Released as [`v1.0.1`](https://github.com/halaprix/hermes-beads/releases/tag/v1.0.1)
-> on GitHub. PyPI and Hermes Agent upstream are deferred to Phase 8.
+`hb bridge dispatch --apply --backend hermes-cli` creates Hermes Kanban tasks using `hermes kanban create`, writes `metadata.hermes_kanban_task_id`, uses `idempotency_key=<bead_id>`, and treats post-create `show` failure as best-effort enrichment rather than retryable mutation failure.
 
-What shipped in v1.0.1:
+### Phase 6 — Bridge Tick / Cron Controller
 
-- Root `README.md` for package indexes and first-run CLI guidance
-- PyPI package metadata (description, license, author, classifiers, project URLs)
-- Public `hb` CLI skeleton with `--version` and dry-run commands
-- Non-editable install smoke test in CI
+`hb bridge tick` composes optional privacy/git/Beads preflight sync, dispatch, result-sync, optional push, lockfile protection, stale-lock recovery, public-safe summaries, and silent no-op output.
 
-**What is NOT shipped (deferred):** PyPI publication, Hermes Agent upstream PR, live dispatch.
+### Phase 7 — Read-Only Observability Dashboard
 
----
+`hb dashboard build` renders public-safe static HTML from Beads issue data. The dashboard is derived, read-only, and not a control plane.
 
-## Phase 3 — Result-Sync Idempotency
+### Phase 9 — Advanced Gates / Human Approval
 
-> Before live dispatch touches Beads or Hermes Kanban, make `hb bridge sync-results --apply`
-> safe to run repeatedly. Claude review identified this as the critical ordering constraint.
+`hb gates list --dry-run`, `hb gates approve <bead-id> --dry-run`, retry escalation metadata, and reviewer routing for PR-gated tasks are implemented. Approval mutation remains deliberately dry-run only in this release.
 
-- Add operation IDs to result-sync records so re-running with the same file is a no-op
-- Write idempotency contract tests that re-sync the same results file and assert no duplicate
-  comments/state changes
-- Dry-run should always match apply preview exactly
+## Phase 8 — Distribution status
 
-**Phase gate:** idempotency contract tests pass; re-running `sync-results --apply` with the same
-results file produces no new state mutations.
+Implemented:
 
----
+- `.github/workflows/publish.yml` builds, checks, and publishes through GitHub Trusted Publishing environments
+- [`docs/release-publishing.md`](release-publishing.md) documents TestPyPI-first flow, PyPI manual dispatch, clean install smoke, rollback, and upstream-skill sequencing
+- `skills/hermes-beads/SKILL.md` is prepared in-repo
+- local build, `twine check`, and clean wheel install smoke pass for `1.1.0a1`
 
-## Phase 4 — Local-File Dispatch Backend & Temp-Product Smoke Loop
+Blocked externally:
 
-> agy review: prove the contract end-to-end with a local harness before wiring real backends.
-
-- Implement a local-file dispatch backend that writes handoff packets to a local directory
-  instead of calling Hermes Kanban
-- End-to-end smoke test that creates a temporary Beads workspace, runs dispatch dry-run + apply,
-  runs result-sync dry-run + apply, and closes the bead
-- The temp-product smoke loop is the go/no-go gate for Phase 5
-
-**Phase gate:** temp-product smoke loop passes end-to-end (dispatch → execute → sync-results → close)
-using the local-file backend only.
-
----
-
-## Phase 5 — Hermes Kanban Backend
-
-> Only after the local backend proves the bridge contract (Phase 4 passes).
-
-- Implement the real Hermes Kanban dispatch backend: `hb bridge dispatch` creates Hermes Kanban
-  tasks from ready beads
-- Wire `hermes_kanban_task_id` back into bead metadata
-- All dispatch operations remain gated by dry-run/apply parity
-- Idempotency rules from Phase 3 apply to the Kanban backend too
-
-**Phase gate:** `hb bridge dispatch --dry-run` and `--apply` work against a real Hermes Kanban
-instance, with the local backend test suite re-run and passing.
-
----
-
-## Phase 6 — Bridge Tick / Cron Controller
-
-> Compose sync, dispatch, result-sync, and push into a conservative scheduled bridge tick.
-
-- Hermes cron job runs `hb bridge tick` on a configurable schedule (default: every 10m)
-- Each tick: pull Beads → dispatch ready beads → sync completed results → push Beads
-- Stay quiet when nothing changed
-- Recursive cron scheduling prohibited (see `docs/cron-polling.md`)
-
-**Phase gate:** cron job runs silently with no changes detected; when work is injected, the tick
-dispatches and syncs correctly.
-
----
-
-## Phase 7 — Read-Only Observability Dashboard
-
-> Derive state from Beads and bridge dry-runs; never become a second source of truth.
-
-- Show ready, running, blocked, failed, and closed beads
-- Show bridge health: last dispatch/sync times, pending operations
-- Show Hermes profile assignments per bead
-- Debug view with raw public-safe packet data (see `docs/dashboard.md`)
-
-**Phase gate:** dashboard renders correctly from `bd ready --json` data; all views use the
-derive-only rule (no mutations, no stored dashboard state).
-
----
-
-## Phase 8 — Distribution
-
-> Publish only after local product smoke passes twice (Phase 4 and Phase 5).
-> See [`docs/release-matrix.md`](docs/release-matrix.md) for the full release matrix,
-> sequencing constraints, versioning policy, and pre-PyPI gate checklist.
-
-Steps (sequenced):
-
-1. **TestPyPI** — automated publish to TestPyPI from CI; verify install works
-2. **PyPI** — public PyPI release after TestPyPI verification
-3. **Hermes Agent upstream skill PR** — contribute `hermes-beads` integration as a Hermes Agent
-   skill only after PyPI artifact is stable
-
-**Phase gate:** `pip install hermes-beads` works from PyPI; Hermes Agent upstream PR is merged
-or ready for review.
-
----
-
-## Phase 9 — Advanced Gates / Human Approval
-
-> Approval gates, retry escalation, reviewer routing — after the basic bridge loop is boring.
-
-- Explicit stop/go gates between phases
-- Retry escalation: after N failures, escalate to human review
-- Reviewer routing: route failed beads to specific Hermes profiles
-
-**Phase gate:** all child tasks closed; phase gate document defines the escalation policy.
-
----
+- TestPyPI upload and install smoke require TestPyPI Trusted Publishing or credentials
+- PyPI upload requires successful TestPyPI verification plus PyPI Trusted Publishing or credentials
+- Hermes Agent upstream PR should wait until the PyPI artifact is stable or receive explicit maintainer approval to proceed earlier
 
 ## Done / Not Done Summary
 
 | Item | Status |
 |------|--------|
 | v1.0.1 GitHub release | ✓ Done |
-| PyPI publication | — Not done (Phase 8) |
-| Hermes Agent upstream skill PR | — Not done (Phase 8) |
-| Compatibility matrix (docs + tests) | ✓ Done |
-| Product contract doc | — In progress |
-| Result-sync idempotency | — Not done (Phase 3) |
-| Local-file dispatch backend | — Not done (Phase 4) |
-| Temp-product smoke loop | — Not done (Phase 4) |
-| Hermes Kanban backend | — Not done (Phase 5) |
-| Bridge tick / cron controller | — Not done (Phase 6) |
-| Dashboard | — Not done (Phase 7) |
-| Advanced gates / human approval | — Not done (Phase 9) |
+| v1.1.0a1 local package artifacts | ✓ Done |
+| Compatibility matrix | ✓ Done |
+| Product contract doc | ✓ Done |
+| Result-sync idempotency | ✓ Done |
+| Local-file dispatch backend | ✓ Done |
+| Temp-product smoke loop | ✓ Done |
+| Hermes Kanban backend | ✓ Done |
+| Bridge tick / cron controller | ✓ Done |
+| Dashboard | ✓ Done |
+| Advanced gates / human approval dry-runs | ✓ Done |
+| Trusted Publishing workflow/docs | ✓ Done |
+| TestPyPI publication | ⚠ Blocked on external package-index config/credentials |
+| PyPI publication | ⚠ Blocked on TestPyPI success + external package-index config/credentials |
+| Hermes Agent upstream skill PR | ⚠ Prepared locally; upstream PR waits for publish/signoff |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved. All changes go through pull
-requests and are tracked via beads issues (`hb-XXX`).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Work is tracked through Beads issues and GitHub PRs; release operations must pass the documented gates before publishing.

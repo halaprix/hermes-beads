@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0a1] - 2026-06-14
+
 ### Added
+
+- `hb bridge tick` dry-run/apply controller with lockfile handling, stale-lock recovery, optional privacy/git/Beads preflight sync, local-file dispatch apply, result-sync composition, public-safe summaries, and silent no-op mode.
+- Read-only static dashboard collector and `hb dashboard build` command with privacy tests over rendered output.
+- Approval gate helpers and dry-run commands: `hb gates list --dry-run` and `hb gates approve <bead-id> --dry-run`.
+- Retry escalation metadata after repeated failed results and reviewer-profile routing for PR-gated tasks.
+- Trusted Publishing workflow for TestPyPI/PyPI and in-repository Hermes skill draft.
+- Real Hermes backend operations docs, release publishing docs, advanced gates docs, and updated cron/dashboard documentation.
 
 - `src/hermes_beads/bd_helpers.py` module with `check_bd_available()`, `run_bd()`, and `run_bd_json()` helpers that raise `click.ClickException` with actionable messages and preserved stderr when bd is missing, returns a non-zero exit, or produces invalid JSON.
 - Unit tests (`tests/test_bd_helpers.py`) covering three error paths: bd not on PATH, non-zero exit with stderr, and invalid JSON output.

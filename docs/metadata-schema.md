@@ -24,6 +24,12 @@ All fields live under the `metadata` key on a Beads issue. Agents MUST NOT write
 | `hermes_stop_condition` | string | free text | What constitutes done — acceptance criteria summary (optional) |
 | `hermes_kanban_task_id` | string | kanban task ID | Link to Hermes Kanban task when bridge is active (optional) |
 | `hermes_iteration` | integer | non-negative | Number of times this task has been attempted (optional) |
+| `hermes_requires_review` | boolean/string | `true`, `false` | Route to the reviewer profile when no explicit profile is set |
+| `hermes_requires_approval` | boolean/string | `true`, `false` | Whether a human approval gate is active |
+| `hermes_gate_status` | string | `pending`, `approved` | Approval gate status |
+| `hermes_gate_type` | string | `human-approval`, `retry-escalation` | Public gate category |
+| `hermes_gate_reason` | string | free text | Short public reason for the gate |
+| `hermes_retry_escalation_threshold` | integer | positive | Failed-attempt count that opens a retry-escalation gate |
 
 ### Lifecycle States
 

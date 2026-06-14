@@ -420,6 +420,29 @@ def test_bridge_dispatch_apply_marks_bead_not_ready(mock_repo_root: Path) -> Non
     assert bead["status"] == "in_progress"
 
 
+def test_bridge_tick_apply_local_file_repeated_has_no_duplicates(mock_repo_root: Path) -> None:
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    bead_id = create_ready_bead(mock_repo_root, "Tick local task")
+    queue_file = Path(".hermes-beads/tick-dispatch.json")
+
+    first = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+        mock_repo_root,
+    )
+    second = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+        mock_repo_root,
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert json.loads(first.stdout)["summary"]["dispatch_count"] == 1
+    assert json.loads(second.stdout)["summary"]["dispatch_count"] == 0
+    queue = json.loads((mock_repo_root / queue_file).read_text(encoding="utf-8"))
+    assert len(queue["tasks"]) == 1
+    assert show_bead(mock_repo_root, bead_id)["status"] == "in_progress"
+
+
 def test_bridge_dispatch_apply_hermes_cli_backend_writes_link_after_success(mock_repo_root: Path) -> None:
     init_real_bd_workspace(mock_repo_root, prefix="cli")
     bead_id = create_ready_bead(mock_repo_root, "Hermes CLI backend task")
@@ -563,7 +586,14 @@ def test_result_sync_failed_increments_iteration(mock_repo_root: Path, tmp_path:
     assert operations[-1] == {
         "op": "update-metadata",
         "bead_id": "hb-xaz",
-        "metadata": {"hermes_status": "failed", "hermes_iteration": 3},
+        "metadata": {
+            "hermes_status": "failed",
+            "hermes_iteration": 3,
+            "hermes_gate_status": "pending",
+            "hermes_gate_type": "retry-escalation",
+            "hermes_requires_approval": "true",
+            "hermes_gate_reason": "retry threshold reached: 3",
+        },
     }
 
 
@@ -603,6 +633,131 @@ def test_gate_profile_defaults_architecture_to_planner(mock_repo_root: Path) -> 
     result = run_hb(["bridge", "profile", "hb-a6n", "--dry-run"], mock_repo_root, env=env)
     assert result.returncode == 0
     assert json.loads(result.stdout)["hermes_profile"] == "planner"
+
+
+def test_gate_profile_routes_review_label_to_reviewer(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id="hb-rev", metadata={}, labels=["pr-gated"])])}
+    result = run_hb(["bridge", "profile", "hb-rev", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["hermes_profile"] == "reviewer"
+    assert data["reason"] == "review gate requested"
+
+
+def test_gates_list_dry_run(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_READY_JSON": json.dumps(
+            [
+                bead(
+                    id="hb-gate",
+                    metadata={
+                        "hermes_requires_approval": "true",
+                        "hermes_gate_status": "pending",
+                        "hermes_gate_type": "human-approval",
+                    },
+                )
+            ]
+        )
+    }
+    result = run_hb(["gates", "list", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["gates"][0]["bead_id"] == "hb-gate"
+
+
+def test_gates_approve_dry_run(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps(
+            [bead(id="hb-gate", metadata={"hermes_gate_status": "pending"})]
+        )
+    }
+    result = run_hb(["gates", "approve", "hb-gate", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["operation"]["op"] == "approve-gate"
+
+
+def test_dashboard_build_dry_run(mock_repo_root: Path, tmp_path: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-dash", metadata={})])}
+    result = run_hb(["dashboard", "build", "--dry-run", "--output", str(tmp_path / "dash.html")], mock_repo_root, env=env)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["summary"]["total"] == 1
+
+
+def test_tick_dry_run_noop_silent(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": "[]"}
+    result = run_hb(["bridge", "tick", "--dry-run", "--silent-noop"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_tick_dry_run_filters_gated_beads(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_READY_JSON": json.dumps(
+            [
+                bead(
+                    id="hb-gated",
+                    metadata={"hermes_requires_approval": "true", "hermes_gate_status": "pending"},
+                ),
+                bead(id="hb-free", metadata={}),
+            ]
+        )
+    }
+    result = run_hb(["bridge", "tick", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["summary"]["dispatch_count"] == 1
+
+
+def test_tick_apply_plans_after_bd_pull(mock_repo_root: Path, tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "bd.log"
+    pulled = tmp_path / "pulled"
+    bd = fake_bin / "bd"
+    bd.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from __future__ import annotations",
+                "import json, os, sys",
+                "from pathlib import Path",
+                "log = Path(os.environ['FAKE_BD_LOG'])",
+                "pulled = Path(os.environ['FAKE_BD_PULLED'])",
+                "args = sys.argv[1:]",
+                "log.write_text(log.read_text() + json.dumps(args) + '\\n' if log.exists() else json.dumps(args) + '\\n')",
+                "if args == ['--version']:",
+                "    print('bd 1.0.0')",
+                "elif args == ['dolt', 'pull']:",
+                "    pulled.write_text('1')",
+                "elif args == ['ready', '--json']:",
+                "    ready = [] if not pulled.exists() else [json.loads(os.environ['FAKE_BD_READY_BEAD'])]",
+                "    print(json.dumps(ready))",
+                "elif args and args[0] == 'comments':",
+                "    print('[]')",
+                "elif args and args[0] == 'update':",
+                "    pass",
+                "else:",
+                "    print('unexpected bd ' + ' '.join(args), file=sys.stderr)",
+                "    sys.exit(2)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bd.chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_BD_LOG": str(log),
+        "FAKE_BD_PULLED": str(pulled),
+        "FAKE_BD_READY_BEAD": json.dumps(bead(id="hb-after-pull", metadata={})),
+    }
+    result = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--bd-pull", "--queue-file", "queue.json"],
+        mock_repo_root,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["summary"]["dispatch_count"] == 1
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert calls.index(["dolt", "pull"]) < calls.index(["ready", "--json"])
 
 
 # -----------------------------------------------------------------------

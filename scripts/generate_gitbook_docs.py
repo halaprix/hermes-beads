@@ -16,11 +16,14 @@ DOC_PAGES = [
     ("Handoff Packet", "handoff-packet.md"),
     ("Kanban Bridge", "kanban-bridge.md"),
     ("Hermes Kanban Backend", "hermes-kanban-backend.md"),
+    ("Hermes Backend Operations", "hermes-backend-operations.md"),
     ("Local Smoke", "local-smoke.md"),
     ("Product Contract", "product-contract.md"),
     ("Gate Resolver", "gate-resolver.md"),
+    ("Advanced Gates", "advanced-gates.md"),
     ("Beads Compatibility", "beads-compatibility.md"),
     ("Release Matrix", "release-matrix.md"),
+    ("Release Publishing", "release-publishing.md"),
     ("Cron Polling", "cron-polling.md"),
     ("Cross-Machine Sync", "cross-machine-sync.md"),
     ("Project Dashboard", "dashboard.md"),
@@ -40,9 +43,11 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Handoff Packet](handoff-packet.md) — JSON context shape passed between Beads and Hermes.
 - [Kanban Bridge](kanban-bridge.md) — bridge design and implemented dry-run commands.
 - [Hermes Kanban Backend](hermes-kanban-backend.md) — CLI contract, backend behavior, and live smoke evidence.
+- [Hermes Backend Operations](hermes-backend-operations.md) — operational boundaries for the real Hermes CLI backend.
 - [Local Smoke](local-smoke.md) — temp-product smoke loop for dispatch/result-sync changes.
 - [Product Contract](product-contract.md) — authority model, mutation semantics, idempotency rules.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
+- [Advanced Gates](advanced-gates.md) — approval metadata, retry escalation, and human-in-loop flow.
 - [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
 
 ## Project Roadmap
