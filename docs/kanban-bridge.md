@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Hermes Kanban dispatch bridge is the integration layer between Beads (durable task graph) and Hermes Kanban (execution queue). It reads ready beads from Beads, creates Hermes Kanban tasks, and writes `kanban_task_id` back to the bead's metadata so results sync back to Beads.
+The Hermes Kanban dispatch bridge is the integration layer between Beads (durable task graph) and Hermes Kanban (execution queue). It reads ready beads from Beads, creates Hermes Kanban tasks, and writes `hermes_kanban_task_id` back to the bead's metadata so results sync back to Beads.
 
 ## Architecture
 
@@ -45,10 +45,11 @@ Dispatch planning is split from the Click command in `src/hermes_beads/dispatch_
 - `DispatchBackend` defines the future backend contract. The minimum dispatch-apply surface is `create(payload) -> task_id`; `show(task_id)` and `complete(task_id, status, summary)` are reserved for backends that also serve result-sync flows.
 - `kanban_payload_for_bead(bead)` is the IO-free default payload builder used by unit tests. The CLI injects its existing richer `build_kanban_payload` wrapper so `bridge dispatch --dry-run` still emits full handoff bodies, including comments gathered from Beads.
 
-This preserves the no-live-mutation contract for this phase: the planner describes what dispatch would do, and the CLI prints the planned create payloads. `hb bridge dispatch --apply --backend local-file --queue-file <path>` replays the same plan into the deterministic queue, writes `metadata.hermes_kanban_task_id` back to Beads, and gates the bead to `in_progress` so it leaves the ready queue. The Beads `status` field remains canonical; `hermes_status` is advisory only. Ready beads that already carry a dispatch link are skipped on subsequent runs.
+This preserves the no-live-mutation contract for this phase: the planner describes what dispatch would do, and the CLI prints the planned create payloads. `hb bridge dispatch --apply --backend local-file --queue-file <path>` replays the same plan into the deterministic queue, writes `metadata.hermes_kanban_task_id` back to Beads, and gates the bead to `in_progress` so it leaves the ready queue. `hb bridge dispatch --apply --backend hermes-cli` uses the real Hermes Kanban CLI, then writes the returned task id back to Beads and gates the bead the same way. The Beads `status` field remains canonical; `hermes_status` is advisory only. Ready beads that already carry a dispatch link are skipped on subsequent runs.
 
 ### Phase 3
-Implemented as `hb bridge sync-results --dry-run --results-file <file>`. It maps completed/failed Hermes Kanban result records back into Beads comment/close/metadata operations. Live mutation remains guarded until the controller enables it explicitly.
+Result-sync idempotency is implemented with `hermes-beads-op:` markers in Beads comments. Re-running the same result record skips already-applied mutations.
+
 
 ### Phase 4
 Documented in `docs/cron-polling.md`. The cron loop should run dispatch and result-sync on a conservative schedule and stay silent when nothing changed.
@@ -81,7 +82,8 @@ the caller's project root.
 | Scenario | Behavior |
 |----------|----------|
 | Bead not found | Skip, log |
-| Kanban task creation fails | Retry up to 3 times, then mark bead as failed |
+| Kanban task creation fails | Exit non-zero and leave Beads unchanged |
+| Kanban task creation succeeds but lookup fails | Keep the Beads link/status mutation and return a minimal task id in apply output |
 | Worker timeout | Bridge marks bead as failed with iteration increment |
 | Result sync fails | Keep kanban task open, retry on next bridge run |
 

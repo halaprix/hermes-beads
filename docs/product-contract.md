@@ -1,7 +1,7 @@
 # Bridge Product Contract
 
 > Authority model, mutation semantics, and idempotency rules for hermes-beads.
-> Last updated: 2026-06-12.
+> Last updated: 2026-06-14.
 
 ## 1. Authority Model
 
@@ -39,9 +39,13 @@ Beads to reconstruct them.
 **Dashboards** are observability surfaces derived from `bd` commands. They never write to Beads
 or any other authoritative store. See [`docs/dashboard.md`](dashboard.md).
 
-## 2. Current Live Mutation Path
+## 2. Current Live Mutation Paths
 
-The only live mutation path as of v1.0.1 is **`hb bridge sync-results --apply`**.
+The live mutation paths as of v1.0.1+ are:
+
+- **`hb bridge sync-results --apply`** — writes result comments and closes/updates Beads.
+- **`hb bridge dispatch --apply --backend local-file`** — writes deterministic local queue records, links beads, and gates them `in_progress`.
+- **`hb bridge dispatch --apply --backend hermes-cli`** — creates real Hermes Kanban tasks, links beads, and gates them `in_progress`.
 
 ### `hb bridge sync-results`
 
@@ -114,13 +118,13 @@ applied", not the comment text or close status alone (those can be set by other 
 > (the `result:` / `failed:` prefix lines still parse the same), but consumers that grep for
 > the literal `[op:sync-` pattern need to be updated.
 
-## 3. Future Live Mutation Paths
+## 3. Dispatch Mutation Path
 
-### `hb bridge dispatch --apply` (Phase 4/5)
+### `hb bridge dispatch --apply`
 
 ```
 hb bridge dispatch --dry-run      # preview only — implemented
-hb bridge dispatch --apply        # implemented for --backend local-file
+hb bridge dispatch --apply        # implemented for --backend local-file or --backend hermes-cli
 ```
 
 **Current behavior:**
@@ -140,6 +144,9 @@ hb bridge dispatch --apply        # implemented for --backend local-file
 - When the local-file backend is active, dispatch writes handoff packets to the configured
   output directory. Re-running dispatch on the same set of ready beads MUST produce identical
   packets (content-addressable or skip-if-exists semantics).
+- When the Hermes CLI backend is active, dispatch payloads MUST include `idempotency_key` derived
+  from the bead ID. The backend passes it to `hermes kanban create --idempotency-key`, preventing
+  duplicate Kanban tasks if creation succeeds but Beads linkage fails before retry.
 
 ### `hb bridge tick` (Phase 6)
 
@@ -349,8 +356,8 @@ The product contract phases align with the roadmap stages in [`ROADMAP.md`](road
 | Phase 1 | This document | hb-ip5.2 | Done (v1.0.1) |
 | Phase 2 | §5 Local-File Backend, §5 Hermes Kanban Backend | hb-ipx.x | Done (v1.0.1 — package + dry-run commands) |
 | Phase 3 | §7 Result Operation IDs, §10 Retry Policy | hb-b88.4 (op-id) + hb-b88.8 (docs) | Done (v1.0.1+) |
-| Phase 4 | §5 Local-File Backend dispatch path | hb-b88.x | Planned |
-| Phase 5 | §5 Hermes Kanban Backend | hb-b88.x | Planned |
+| Phase 4 | §5 Local-File Backend dispatch path | hb-17h | Done |
+| Phase 5 | §5 Hermes Kanban Backend | hb-3ze | In progress — backend + live smoke done |
 | Phase 6 | §3 Bridge Tick | hb-b88.x | Planned |
 
 The Phase 3 work landed as: (a) `result_ops.py` exposing `build_op_id` and `parse_op_marker`,
@@ -378,9 +385,8 @@ you are reading now.
 
 ### Unsupported Operations
 
-- **`hb bridge dispatch --apply`** without first having local-file and/or Hermes Kanban backend
-  implementations (Phase 4 / Phase 5). Idempotency for dispatch is covered by the
-  `hermes_kanban_task_id` rule in §3, independent of result-sync idempotency.
+- **`hb bridge dispatch --apply` without an explicit backend.** Dispatch apply requires
+  `--backend local-file` or `--backend hermes-cli`; the command refuses ambiguous mutation.
 - **Live cron tick** without completing Phase 4 and Phase 5 (local and Hermes backends).
 - **Cross-machine Beads sync** without explicit `bd dolt pull/push` — the bridge does not
   implement its own sync protocol.

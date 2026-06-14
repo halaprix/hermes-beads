@@ -204,6 +204,7 @@ class TestKanbanPayloadForBead:
         payload = kanban_payload_for_bead(bead)
         assert payload["source"] == "beads"
         assert payload["source_bead_id"] == "hb-fup"
+        assert payload["idempotency_key"] == "hb-fup"
         assert payload["title"] == "hb-fup: Bridge task"
         assert payload["assignee"] == "ts-dev"
         assert payload["priority"] == 3
@@ -313,6 +314,7 @@ class TestBuildDispatchPlan:
         for key in (
             "source",
             "source_bead_id",
+            "idempotency_key",
             "title",
             "assignee",
             "priority",

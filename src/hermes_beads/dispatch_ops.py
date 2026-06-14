@@ -203,6 +203,7 @@ def kanban_payload_for_bead(bead: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": "beads",
         "source_bead_id": bead_id,
+        "idempotency_key": bead_id,
         "title": f"{bead_id}: {packet.get('goal', '')}",
         "assignee": profile,
         "priority": bead.get("priority", 2),

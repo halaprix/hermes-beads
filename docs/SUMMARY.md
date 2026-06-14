@@ -5,6 +5,8 @@
 * [Metadata Schema](metadata-schema.md)
 * [Handoff Packet](handoff-packet.md)
 * [Kanban Bridge](kanban-bridge.md)
+* [Hermes Kanban Backend](hermes-kanban-backend.md)
+* [Local Smoke](local-smoke.md)
 * [Product Contract](product-contract.md)
 * [Gate Resolver](gate-resolver.md)
 * [Beads Compatibility](beads-compatibility.md)

@@ -8,6 +8,8 @@ Hermes-Beads connects [Beads](https://github.com/gastownhall/beads) task state w
 - [Metadata Schema](metadata-schema.md) — public metadata contract used by agents.
 - [Handoff Packet](handoff-packet.md) — JSON context shape passed between Beads and Hermes.
 - [Kanban Bridge](kanban-bridge.md) — bridge design and implemented dry-run commands.
+- [Hermes Kanban Backend](hermes-kanban-backend.md) — CLI contract, backend behavior, and live smoke evidence.
+- [Local Smoke](local-smoke.md) — temp-product smoke loop for dispatch/result-sync changes.
 - [Product Contract](product-contract.md) — authority model, mutation semantics, idempotency rules.
 - [Gate Resolver](gate-resolver.md) — profile routing rules.
 - [Beads Compatibility](beads-compatibility.md) — supported setup modes, bd output contract, minimum version.
