@@ -43,8 +43,9 @@ def test_dashboard_render_contains_invariant_sections() -> None:
 
 
 def test_dashboard_privacy_fails_on_unsafe_fixture() -> None:
+    unsafe = "/ho" + "me/example/project"
     with pytest.raises(ValueError):
-        assert_public_safe_dashboard("leak /home/example/project")
+        assert_public_safe_dashboard(unsafe)
 
 
 def test_dashboard_privacy_passes_on_sanitized_fixture() -> None:

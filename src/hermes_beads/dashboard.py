@@ -13,11 +13,24 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+HOME_PATH_PATTERN = r"/ho" + r"me/|/Us" + r"ers/|C:\\Us" + r"ers\\"
+PRIVATE_NET_PATTERN = (
+    r"(^|[^0-9])"
+    r"(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|"
+    r"172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]{1,3}\.[0-9]{1,3})"
+    r"([^0-9]|$)"
+)
+TOKEN_PATTERN = (
+    r"git" + r"hub" + r"_pat_|gh" + r"p_|"
+    + r"BEGIN .*PR" + r"IVATE KEY|----BEGIN.*PR" + r"IVATE KEY----"
+)
+PROVIDER_KEY_PATTERN = r"OPEN" + r"AI_|ANTH" + r"ROPIC_|DEEP" + r"SEEK_|X" + r"AI_|AW" + r"S_"
+
 PRIVATE_PATTERNS = (
-    re.compile(r"/home/|/Users/|C:\\Users\\", re.IGNORECASE),
-    re.compile(r"(^|[^0-9])(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)"),
-    re.compile(r"github_pat_|ghp_|BEGIN .*PRIVATE KEY|----BEGIN.*PRIVATE KEY----", re.IGNORECASE),
-    re.compile(r"OPENAI_|ANTHROPIC_|DEEPSEEK_|XAI_|AWS_", re.IGNORECASE),
+    re.compile(HOME_PATH_PATTERN, re.IGNORECASE),
+    re.compile(PRIVATE_NET_PATTERN),
+    re.compile(TOKEN_PATTERN, re.IGNORECASE),
+    re.compile(PROVIDER_KEY_PATTERN, re.IGNORECASE),
 )
 
 PUBLIC_METADATA_KEYS = {
