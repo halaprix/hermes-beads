@@ -115,23 +115,32 @@ class TickLock:
         self.acquired = False
 
     def acquire(self) -> None:
-        """Acquire the lock, replacing it only when it is stale."""
-        now = int(time.time())
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-                created_at = int(data.get("created_at", 0))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                created_at = 0
-            age = now - created_at
-            if age < self.stale_after_seconds:
-                raise TickLockError(f"tick lock is held: {self.path}")
+        """Acquire the lock atomically, replacing it only when it is stale."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps({"pid": os.getpid(), "created_at": now}, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        self.acquired = True
+        for _ in range(3):
+            now = int(time.time())
+            payload = json.dumps({"pid": os.getpid(), "created_at": now}, sort_keys=True) + "\n"
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                try:
+                    data = json.loads(self.path.read_text(encoding="utf-8"))
+                    created_at = int(data.get("created_at", 0))
+                except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+                    continue
+                age = now - created_at
+                if age < self.stale_after_seconds:
+                    raise TickLockError(f"tick lock is held: {self.path}")
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+            self.acquired = True
+            return
+        raise TickLockError(f"could not acquire tick lock: {self.path}")
 
     def release(self) -> None:
         """Release the lock if this instance acquired it."""

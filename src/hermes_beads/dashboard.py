@@ -87,7 +87,7 @@ def collect_dashboard_data(
                 "id": _safe_str(bead.get("id")),
                 "title": _safe_str(bead.get("title")),
                 "status": _safe_str(bead.get("status")),
-                "priority": bead.get("priority", 2),
+                "priority": _safe_str(bead.get("priority", 2), limit=20),
                 "issue_type": _safe_str(bead.get("issue_type")),
                 "assignee": _safe_str(bead.get("assignee") or bead.get("owner")),
                 "labels": [_safe_str(label) for label in (bead.get("labels", []) or [])],

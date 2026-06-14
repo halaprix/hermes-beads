@@ -690,6 +690,76 @@ def test_tick_dry_run_noop_silent(mock_repo_root: Path) -> None:
     assert result.stdout == ""
 
 
+def test_tick_dry_run_filters_gated_beads(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_READY_JSON": json.dumps(
+            [
+                bead(
+                    id="hb-gated",
+                    metadata={"hermes_requires_approval": "true", "hermes_gate_status": "pending"},
+                ),
+                bead(id="hb-free", metadata={}),
+            ]
+        )
+    }
+    result = run_hb(["bridge", "tick", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["summary"]["dispatch_count"] == 1
+
+
+def test_tick_apply_plans_after_bd_pull(mock_repo_root: Path, tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "bd.log"
+    pulled = tmp_path / "pulled"
+    bd = fake_bin / "bd"
+    bd.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from __future__ import annotations",
+                "import json, os, sys",
+                "from pathlib import Path",
+                "log = Path(os.environ['FAKE_BD_LOG'])",
+                "pulled = Path(os.environ['FAKE_BD_PULLED'])",
+                "args = sys.argv[1:]",
+                "log.write_text(log.read_text() + json.dumps(args) + '\\n' if log.exists() else json.dumps(args) + '\\n')",
+                "if args == ['--version']:",
+                "    print('bd 1.0.0')",
+                "elif args == ['dolt', 'pull']:",
+                "    pulled.write_text('1')",
+                "elif args == ['ready', '--json']:",
+                "    ready = [] if not pulled.exists() else [json.loads(os.environ['FAKE_BD_READY_BEAD'])]",
+                "    print(json.dumps(ready))",
+                "elif args and args[0] == 'comments':",
+                "    print('[]')",
+                "elif args and args[0] == 'update':",
+                "    pass",
+                "else:",
+                "    print('unexpected bd ' + ' '.join(args), file=sys.stderr)",
+                "    sys.exit(2)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bd.chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_BD_LOG": str(log),
+        "FAKE_BD_PULLED": str(pulled),
+        "FAKE_BD_READY_BEAD": json.dumps(bead(id="hb-after-pull", metadata={})),
+    }
+    result = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--bd-pull", "--queue-file", "queue.json"],
+        mock_repo_root,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["summary"]["dispatch_count"] == 1
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert calls.index(["dolt", "pull"]) < calls.index(["ready", "--json"])
+
+
 # -----------------------------------------------------------------------
 # hb-b88.4: result-sync dry-run marks duplicate operations as skipped
 # -----------------------------------------------------------------------

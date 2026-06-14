@@ -1,7 +1,7 @@
 # Release Matrix
 
 > Where hermes-beads artifacts ship, in what order, and what gates guard each distribution phase.
-> Last updated: 2026-06-12.
+> Last updated: 2026-06-14.
 
 ## Overview
 
@@ -11,9 +11,10 @@ and ensure every artifact is verified before reaching the next tier.
 | Target | Artifact | Purpose | Status |
 |--------|----------|---------|--------|
 | GitHub Release | Source tarball + signed tag | Pre-PyPI distribution; changelog-anchored milestone marker | **Done** — v1.0.1 |
-| TestPyPI | `hermes-beads` wheel + sdist | Canary — verify packaging, metadata, and `pip install` before public PyPI | Planned (Phase 8) |
-| PyPI | `hermes-beads` wheel + sdist | Public package index — `pip install hermes-beads` | Planned (Phase 8) |
-| Hermes Agent upstream | `hermes-beads` skill SKILL.md + entry | Upstream Hermes Agent skill — enables `hermes-beads` as a first-party Hermes capability | Planned (Phase 8) |
+| Local alpha artifacts | `hermes-beads` wheel + sdist | Release-candidate package smoke before package-index upload | **Done locally** — v1.1.0a1 build/twine/wheel smoke |
+| TestPyPI | `hermes-beads` wheel + sdist | Canary — verify packaging, metadata, and `pip install` before public PyPI | Blocked on Trusted Publishing/credentials |
+| PyPI | `hermes-beads` wheel + sdist | Public package index — `pip install hermes-beads` | Blocked on TestPyPI success + Trusted Publishing/credentials |
+| Hermes Agent upstream | `hermes-beads` skill SKILL.md + entry | Upstream Hermes Agent skill — enables `hermes-beads` as a first-party Hermes capability | Prepared locally; waits for publish/signoff |
 
 ## Sequencing Constraints
 
@@ -34,9 +35,12 @@ GitHub Release ──> TestPyPI ──> PyPI ──> Hermes Agent upstream
    has been exercised in real workflows (local-file dispatch, Phase 4), the upstream PR can be
    prepared.
 
-## GitHub Release (✓ v1.0.1)
+## GitHub Release / Local Alpha
 
 **Done:** [v1.0.1](https://github.com/halaprix/hermes-beads/releases/tag/v1.0.1)
+
+`v1.1.0a1` is prepared in this branch as local wheel/sdist artifacts. It is not considered
+published until TestPyPI and PyPI package-index upload/install smokes pass.
 
 What ships:
 - Source archive (GitHub auto-archive from tag)
@@ -61,10 +65,10 @@ without affecting the public PyPI index.
 | Smoke install `pip install --index-url https://test.pypi.org/simple/ hermes-beads` | CI | Same workflow |
 | Metadata review (description renders correctly, classifiers correct, project URLs work) | Manual | Developer checks TestPyPI project page |
 
-### Token Requirements
+### Trusted Publishing / Credential Requirements
 
-- TestPyPI API token stored as `TEST_PYPI_TOKEN` in GitHub repository secrets.
-- Token scope: entire TestPyPI account (TestPyPI does not support per-project tokens).
+- Preferred: GitHub environment `testpypi` configured for PyPI Trusted Publishing/OIDC.
+- Fallback: environment-scoped TestPyPI API token stored as a secret, never committed.
 
 ### Gate Checklist
 
@@ -82,10 +86,10 @@ Before a TestPyPI publish is considered successful, ALL of the following must pa
 
 **When:** After TestPyPI verification passes and all pre-PyPI gates are green (see below).
 
-### Token Requirements
+### Trusted Publishing / Credential Requirements
 
-- PyPI API token stored as `PYPI_TOKEN` in GitHub repository secrets.
-- Token scope: the `hermes-beads` project only (per-project token).
+- Preferred: GitHub environment `pypi` configured for PyPI Trusted Publishing/OIDC.
+- Fallback: project-scoped PyPI API token stored as an environment-scoped secret, never committed.
 
 ### Automated Publish Flow
 

@@ -41,6 +41,11 @@ jobs:
         run: python -m build
       - name: Check artifacts
         run: python -m twine check dist/*
+      - name: Clean wheel install smoke
+        run: |
+          python -m venv /tmp/hb-wheel-smoke
+          /tmp/hb-wheel-smoke/bin/pip install dist/*.whl
+          /tmp/hb-wheel-smoke/bin/hb --version
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -61,6 +66,15 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+      - name: TestPyPI install smoke
+        run: |
+          python -m venv /tmp/hb-testpypi-smoke
+          VERSION=$(python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          /tmp/hb-testpypi-smoke/bin/pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "hermes-beads==$VERSION"
+          /tmp/hb-testpypi-smoke/bin/hb --version
 
   publish-pypi:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.repository == 'pypi'

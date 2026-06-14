@@ -29,7 +29,7 @@ from hermes_beads.hermes_kanban_backend import (
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 from hermes_beads.tick_ops import TickLock, TickLockError, build_tick_plan, load_results_file, tick_summary
 from hermes_beads.dashboard import collect_dashboard_data, write_dashboard
-from hermes_beads.gates import bead_requires_review, build_gate_approval_plan, escalation_metadata, list_gates
+from hermes_beads.gates import bead_requires_review, build_gate_approval_plan, escalation_metadata, gate_for_bead, list_gates
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -514,12 +514,11 @@ def bridge_tick(
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
     check_bd_available()
-    ready_beads = get_ready_beads()
-    dispatch_beads = dispatch_candidates(ready_beads)
-    results = load_results_file(results_file)
-    plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
-    tick_plan = build_tick_plan(dispatch_beads, results, backend=backend, queue_file=str(queue_file))
     if dry_run:
+        ready_beads = get_ready_beads()
+        dispatch_beads = [bead for bead in dispatch_candidates(ready_beads) if not gate_for_bead(bead)]
+        results = load_results_file(results_file)
+        tick_plan = build_tick_plan(dispatch_beads, results, backend=backend, queue_file=str(queue_file))
         if silent_noop and tick_plan.is_noop:
             return
         click.echo(json.dumps(tick_plan.to_dict(), indent=2))
@@ -532,6 +531,11 @@ def bridge_tick(
                 _run_command(["git", "pull", "--rebase"])
             if bd_pull:
                 run_bd(["dolt", "pull"])
+            ready_beads = get_ready_beads()
+            dispatch_beads = [bead for bead in dispatch_candidates(ready_beads) if not gate_for_bead(bead)]
+            results = load_results_file(results_file)
+            plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
+            tick_plan = build_tick_plan(dispatch_beads, results, backend=backend, queue_file=str(queue_file))
             applied_tasks = _dispatch_apply(backend, queue_file, plan) if tick_plan.dispatch_count else []
             result_operations: list[dict[str, Any]] = []
             if results is not None:
@@ -663,9 +667,19 @@ def dashboard_build(output: Path, dry_run: bool) -> None:
         beads = run_bd_json(["list", "--json"])
     data = collect_dashboard_data(list(beads or []))
     if dry_run:
-        click.echo(json.dumps(data, indent=2))
+        rendered = json.dumps(data, indent=2)
+        try:
+            from hermes_beads.dashboard import assert_public_safe_dashboard
+
+            assert_public_safe_dashboard(rendered)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(rendered)
         return
-    path = write_dashboard(output, data)
+    try:
+        path = write_dashboard(output, data)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps({"output": str(path), "items": len(data["items"]), "applied": True}, indent=2))
 
 

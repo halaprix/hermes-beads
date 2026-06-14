@@ -41,11 +41,12 @@ or any other authoritative store. See [`docs/dashboard.md`](dashboard.md).
 
 ## 2. Current Live Mutation Paths
 
-The live mutation paths as of v1.0.1+ are:
+The live mutation paths as of v1.1.0a1 are:
 
 - **`hb bridge sync-results --apply`** — writes result comments and closes/updates Beads.
 - **`hb bridge dispatch --apply --backend local-file`** — writes deterministic local queue records, links beads, and gates them `in_progress`.
 - **`hb bridge dispatch --apply --backend hermes-cli`** — creates real Hermes Kanban tasks, links beads, and gates them `in_progress`.
+- **`hb bridge tick --apply`** — cron-friendly composition of preflight sync, dispatch, result-sync, and optional push.
 
 ### `hb bridge sync-results`
 
@@ -148,16 +149,22 @@ hb bridge dispatch --apply        # implemented for --backend local-file or --ba
   from the bead ID. The backend passes it to `hermes kanban create --idempotency-key`, preventing
   duplicate Kanban tasks if creation succeeds but Beads linkage fails before retry.
 
-### `hb bridge tick` (Phase 6)
+### `hb bridge tick`
 
 ```
-hb bridge tick                    # NOT YET IMPLEMENTED
+hb bridge tick --dry-run
+hb bridge tick --apply --backend local-file
+hb bridge tick --apply --backend hermes-cli
 ```
 
 The bridge tick composes dispatch, sync-results, and Beads push into a single cron-friendly
 command. Its mutation semantics are the union of the individual commands it runs. The tick
 must be idempotent: if it is interrupted mid-way, re-running it must complete pending work
 without duplicating completed work.
+
+Live apply acquires the tick lock and runs requested privacy/git/Beads preflight before reading
+ready beads or building a dispatch plan. This is an intentional exception to the old "no state
+read during apply" rule: cron apply must act on post-pull state, not stale preflight state.
 
 ## 4. Dry-Run / Apply Parity
 
@@ -177,9 +184,9 @@ hb bridge sync-results --apply      → executes exactly those operations
    the same order during apply. No hidden operations, no conditional side effects.
 2. **Deterministic output**: dry-run on the same input state produces the same output every
    time (modulo timestamps).
-3. **No state read during apply**: the apply path must not re-read Beads state and branch on
-   it. All decision-making happens in the dry-run / plan step; the apply step is a mechanical
-   replay. This prevents skew between what dry-run predicted and what apply actually does.
+3. **No hidden mutation**: apply must either replay the dry-run plan for single-command actions
+   or document why it plans after preflight. `hb bridge tick --apply` plans inside the lock after
+   optional pull operations so cron runs never mutate stale state.
 4. **Error isolation**: if a single operation within apply fails, the remaining operations must
    still execute. Partial failure is acceptable; atomic rollback is not required.
 
@@ -188,6 +195,7 @@ hb bridge sync-results --apply      → executes exactly those operations
 | Command | Dry-run precision | Notes |
 |---------|-------------------|-------|
 | `sync-results --apply` | Exact | `build_result_sync_operations` produces the same list whether called from dry-run or apply. See `src/hermes_beads/cli.py`. |
+| `tick --apply` | Post-preflight exact | Live tick plans after lock and requested pull/preflight; dry-run previews the current local state only. |
 
 ## 5. Backend Boundaries
 
@@ -357,8 +365,11 @@ The product contract phases align with the roadmap stages in [`ROADMAP.md`](road
 | Phase 2 | §5 Local-File Backend, §5 Hermes Kanban Backend | hb-ipx.x | Done (v1.0.1 — package + dry-run commands) |
 | Phase 3 | §7 Result Operation IDs, §10 Retry Policy | hb-b88.4 (op-id) + hb-b88.8 (docs) | Done (v1.0.1+) |
 | Phase 4 | §5 Local-File Backend dispatch path | hb-17h | Done |
-| Phase 5 | §5 Hermes Kanban Backend | hb-3ze | In progress — backend + live smoke done |
-| Phase 6 | §3 Bridge Tick | hb-b88.x | Planned |
+| Phase 5 | §5 Hermes Kanban Backend | hb-3ze | Done |
+| Phase 6 | §3 Bridge Tick | hb-2rn | Done |
+| Phase 7 | Dashboard authority model | hb-e92 | Done |
+| Phase 8 | Release publishing workflow | hb-dnb | Workflow/docs done; TestPyPI/PyPI externally blocked |
+| Phase 9 | Gate metadata/retry/reviewer routing | hb-ejy | Done |
 
 The Phase 3 work landed as: (a) `result_ops.py` exposing `build_op_id` and `parse_op_marker`,
 (b) `cli.py` wiring the marker into the `comment` op body and reading prior comments for
@@ -387,7 +398,7 @@ you are reading now.
 
 - **`hb bridge dispatch --apply` without an explicit backend.** Dispatch apply requires
   `--backend local-file` or `--backend hermes-cli`; the command refuses ambiguous mutation.
-- **Live cron tick** without completing Phase 4 and Phase 5 (local and Hermes backends).
+- **Live cron tick without an explicit backend.** Use `--backend local-file` or `--backend hermes-cli`.
 - **Cross-machine Beads sync** without explicit `bd dolt pull/push` — the bridge does not
   implement its own sync protocol.
 - **Direct `.beads/issues.jsonl` manipulation** — hb commands read and write only through
@@ -444,10 +455,9 @@ recommended dispatcher policy is:
 | `in_progress` | any | Do not dispatch; an in-flight attempt exists. |
 | `completed` | any | Bead is closed; no dispatch needed. |
 
-These are recommendations, not contract — the bridge guarantees that `hermes_iteration`
-and `hermes_status` are consistent with the comment marker, but it does not choose a
-threshold for "too many retries". Dispatchers and operators are free to set their own
-escalation policy.
+These recommendations are now implemented by `hb bridge sync-results`: failed results reaching
+`metadata.hermes_retry_escalation_threshold` (default `3`) add a pending `retry-escalation` gate.
+Dispatchers and operators may override the threshold per bead.
 
 ### Failure Detection Boundary
 

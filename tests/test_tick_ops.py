@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
 
@@ -53,3 +54,27 @@ def test_tick_lock_recovers_stale_lock(tmp_path: Path) -> None:
     assert json.loads(lock.read_text(encoding="utf-8"))["pid"] != 123
     tick_lock.release()
     assert not lock.exists()
+
+
+def test_tick_lock_allows_only_one_concurrent_acquirer(tmp_path: Path) -> None:
+    lock = tmp_path / "tick.lock"
+    barrier = Barrier(2)
+    results: list[str] = []
+
+    def attempt() -> None:
+        tick_lock = TickLock(lock, stale_after_seconds=3600)
+        barrier.wait()
+        try:
+            tick_lock.acquire()
+        except TickLockError:
+            results.append("blocked")
+        else:
+            results.append("acquired")
+
+    threads = [Thread(target=attempt), Thread(target=attempt)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == ["acquired", "blocked"]
