@@ -276,6 +276,34 @@ If the assignee/profile is not spawnable in the current environment, dispatch re
 
 `hermes kanban init` can be run repeatedly and does not mutate useful state after the first initialization.
 
+## Live Backend Smoke
+
+On 2026-06-14, the `hermes-cli` apply backend was smoke-tested against a clean temporary Hermes home and a fresh temporary Beads product workspace.
+
+Scenario:
+
+1. initialize a clean Hermes Kanban DB
+2. initialize a clean Beads workspace
+3. create two ready beads with Hermes metadata
+4. run `hb bridge dispatch --apply --backend hermes-cli`
+5. run the same dispatch command again
+6. verify Beads linkage and Kanban task count
+
+Observed result:
+
+```json
+{
+  "created_bead_count": 2,
+  "first_dispatch_count": 2,
+  "second_dispatch_count": 0,
+  "linked_task_count": 2,
+  "kanban_task_count": 2,
+  "bead_statuses": ["in_progress"]
+}
+```
+
+This confirms the real CLI backend creates exactly one Kanban task per ready bead, writes `metadata.hermes_kanban_task_id` back to Beads after successful creation, marks dispatched beads `in_progress`, and skips already-linked beads on repeat dispatch.
+
 ## Stop / Go Decision
 
 **Go.**
