@@ -38,9 +38,13 @@ hb bridge dispatch --dry-run
 ```bash
 hb --version
 hb bridge dispatch --dry-run
+hb bridge tick --dry-run
+hb bridge tick --apply --backend local-file --queue-file .hermes-beads/dispatch.json
 hb bridge profile <bead-id> --dry-run
 hb bridge sync-results --dry-run --results-file results.json
 hb bridge sync-results --apply --results-file results.json
+hb dashboard build --output dashboard.html
+hb gates list --dry-run
 ```
 
 ## Release gates

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -26,6 +27,9 @@ from hermes_beads.hermes_kanban_backend import (
     HermesKanbanBackendError,
 )
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
+from hermes_beads.tick_ops import TickLock, TickLockError, build_tick_plan, load_results_file, tick_summary
+from hermes_beads.dashboard import collect_dashboard_data, write_dashboard
+from hermes_beads.gates import bead_requires_review, build_gate_approval_plan, escalation_metadata, list_gates
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -166,6 +170,8 @@ def explain_profile_selection(bead: dict[str, Any]) -> tuple[str, str]:
         return str(explicit), "explicit metadata.hermes_profile"
 
     labels = set(bead.get("labels", []) or [])
+    if bead_requires_review(bead):
+        return "reviewer", "review gate requested"
     if "docs" in labels:
         return "docs", "labels include docs"
     if "planning" in labels or "architecture" in labels:
@@ -277,13 +283,17 @@ def build_result_sync_operations(
             operations.append({"op": "close", "bead_id": bead_id, "reason": "kanban task completed"})
         elif status in {"failed", "timeout", "error"}:
             bead = get_bead_json(str(bead_id)) or {"id": bead_id, "metadata": {}}
+            iteration = next_iteration(bead)
+            metadata = {"hermes_status": "failed", "hermes_iteration": iteration}
+            threshold = int((bead.get("metadata", {}) or {}).get("hermes_retry_escalation_threshold", 3) or 3)
+            metadata.update(escalation_metadata(iteration, threshold))
             comment_body = f"hermes-beads-op: {op_id}\nfailed: {summary}"
             operations.append({"op": "comment", "bead_id": bead_id, "body": comment_body})
             operations.append(
                 {
                     "op": "update-metadata",
                     "bead_id": bead_id,
-                    "metadata": {"hermes_status": "failed", "hermes_iteration": next_iteration(bead)},
+                    "metadata": metadata,
                 }
             )
         else:
@@ -304,6 +314,48 @@ def apply_result_sync_operations(operations: list[dict[str, Any]]) -> None:
             for key, value in operation.get("metadata", {}).items():
                 args.extend(["--set-metadata", f"{key}={value}"])
             run_bd(args)
+
+
+def _run_command(args: list[str]) -> None:
+    """Run an external command, raising a Click exception on failure."""
+    try:
+        subprocess.run(args, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"command not found: {args[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        msg = f"{' '.join(args)} failed"
+        if stderr:
+            msg += f": {stderr}"
+        raise click.ClickException(msg) from exc
+
+
+def _dispatch_apply(backend: str, queue_file: Path | None, plan: list[Any]) -> list[dict[str, Any]]:
+    """Apply a dispatch plan through the selected backend."""
+    if backend == "local-file":
+        if queue_file is None:
+            raise click.ClickException("--queue-file is required for --backend local-file")
+        dispatch_backend: Any = LocalFileQueueBackend(queue_file, project_root=Path.cwd())
+    elif backend == "hermes-cli":
+        dispatch_backend = HermesKanbanBackend()
+    else:
+        raise click.ClickException(f"unsupported dispatch backend: {backend}")
+    applied_tasks: list[dict[str, Any]] = []
+    for op in plan:
+        if op.kind is not DispatchOpKind.CREATE:
+            continue
+        bead_id = str(op.payload.get("source_bead_id", ""))
+        task_id = dispatch_backend.create(op.payload)
+        if bead_id:
+            write_dispatch_link(bead_id, task_id)
+            gate_dispatch_bead(bead_id)
+        try:
+            task = dispatch_backend.show(task_id)
+        except HermesKanbanBackendError:
+            task = {"id": task_id}
+        if task is not None:
+            applied_tasks.append(task)
+    return applied_tasks
 
 
 @click.group()
@@ -428,6 +480,92 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
     click.echo(json.dumps(output, indent=2))
 
 
+@bridge.command("tick")
+@click.option("--dry-run", is_flag=True, help="Print tick plan without side effects")
+@click.option("--apply", "apply_ops", is_flag=True, help="Run one bridge tick")
+@click.option("--backend", type=click.Choice(["local-file", "hermes-cli"]), default="local-file")
+@click.option("--queue-file", type=click.Path(dir_okay=False, path_type=Path), default=Path(".hermes-beads/dispatch.json"))
+@click.option("--results-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option("--lock-file", type=click.Path(dir_okay=False, path_type=Path), default=Path(".hermes-beads/tick.lock"))
+@click.option("--stale-after", type=int, default=3600, help="Seconds after which a tick lock is stale")
+@click.option("--privacy-scan", is_flag=True, help="Run scripts/scan-privacy.sh before mutating")
+@click.option("--git-pull", is_flag=True, help="Run git pull --rebase before mutating")
+@click.option("--git-push", is_flag=True, help="Run git push after successful mutation")
+@click.option("--bd-pull", is_flag=True, help="Run bd dolt pull before mutating")
+@click.option("--bd-push", is_flag=True, help="Run bd dolt push after successful mutation")
+@click.option("--silent-noop", is_flag=True, help="Emit no stdout when a tick has no work")
+def bridge_tick(
+    dry_run: bool,
+    apply_ops: bool,
+    backend: str,
+    queue_file: Path,
+    results_file: Path | None,
+    lock_file: Path,
+    stale_after: int,
+    privacy_scan: bool,
+    git_pull: bool,
+    git_push: bool,
+    bd_pull: bool,
+    bd_push: bool,
+    silent_noop: bool,
+) -> None:
+    """Plan or run one cron-friendly bridge tick."""
+    if dry_run == apply_ops:
+        click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
+        sys.exit(1)
+    check_bd_available()
+    ready_beads = get_ready_beads()
+    dispatch_beads = dispatch_candidates(ready_beads)
+    results = load_results_file(results_file)
+    plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
+    tick_plan = build_tick_plan(dispatch_beads, results, backend=backend, queue_file=str(queue_file))
+    if dry_run:
+        if silent_noop and tick_plan.is_noop:
+            return
+        click.echo(json.dumps(tick_plan.to_dict(), indent=2))
+        return
+    try:
+        with TickLock(lock_file, stale_after_seconds=stale_after):
+            if privacy_scan:
+                _run_command(["bash", "scripts/scan-privacy.sh"])
+            if git_pull:
+                _run_command(["git", "pull", "--rebase"])
+            if bd_pull:
+                run_bd(["dolt", "pull"])
+            applied_tasks = _dispatch_apply(backend, queue_file, plan) if tick_plan.dispatch_count else []
+            result_operations: list[dict[str, Any]] = []
+            if results is not None:
+                result_list = results.get("results", []) if isinstance(results, dict) else results
+                existing_comments: dict[str, list[dict[str, str]]] = {}
+                for result in result_list:
+                    bead_id = str(result.get("bead_id") or result.get("source_bead_id") or "")
+                    if bead_id and bead_id not in existing_comments:
+                        comments = get_comments(bead_id)
+                        existing_comments[bead_id] = [{"body": c.get("body", "")} for c in comments]
+                result_operations = build_result_sync_operations(list(result_list), existing_comments)
+                apply_result_sync_operations(result_operations)
+            if bd_push:
+                run_bd(["dolt", "push"])
+            if git_push:
+                _run_command(["git", "push"])
+    except (TickLockError, HermesKanbanBackendError, click.ClickException) as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+    if silent_noop and tick_plan.is_noop:
+        return
+    click.echo(
+        json.dumps(
+            {
+                "applied": True,
+                "summary": tick_summary(tick_plan, applied=True),
+                "tasks": applied_tasks,
+                "result_operations": result_operations,
+            },
+            indent=2,
+        )
+    )
+
+
 @bridge.command("sync-results")
 @click.option("--dry-run", is_flag=True, help="Print planned bd operations without side effects")
 @click.option("--apply", "apply_ops", is_flag=True, help="Apply bd operations to the current Beads workspace")
@@ -471,6 +609,64 @@ def bridge_profile(bead_id: str, dry_run: bool) -> None:
         sys.exit(1)
     profile, reason = explain_profile_selection(bead)
     click.echo(json.dumps({"bead_id": bead_id, "hermes_profile": profile, "reason": reason}, indent=2))
+
+
+@main.group("gates")
+def gates_group() -> None:
+    """Inspect and plan approval-gate operations."""
+
+
+@gates_group.command("list")
+@click.option("--dry-run", is_flag=True, help="List gates without mutating")
+def gates_list(dry_run: bool) -> None:
+    """List pending approval gates from open Beads issues."""
+    if not dry_run:
+        click.echo("Error: gates list is dry-run only", err=True)
+        sys.exit(1)
+    beads = _json_env("HB_MOCK_BD_READY_JSON")
+    if beads is None:
+        check_bd_available()
+        beads = run_bd_json(["list", "--status=open", "--json"])
+    click.echo(json.dumps({"gates": list_gates(list(beads or [])), "applied": False}, indent=2))
+
+
+@gates_group.command("approve")
+@click.argument("bead_id")
+@click.option("--dry-run", is_flag=True, help="Print approval plan without mutating")
+def gates_approve(bead_id: str, dry_run: bool) -> None:
+    """Plan approval of a single gate."""
+    if not dry_run:
+        click.echo("Error: gate approval apply is not implemented; use --dry-run", err=True)
+        sys.exit(1)
+    if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
+        check_bd_available()
+    bead = get_bead_json(bead_id)
+    if bead is None:
+        click.echo(f"Error: bead '{bead_id}' not found", err=True)
+        sys.exit(1)
+    click.echo(json.dumps({"operation": build_gate_approval_plan(bead), "applied": False}, indent=2))
+
+
+@main.group("dashboard")
+def dashboard_group() -> None:
+    """Build read-only static dashboard artifacts."""
+
+
+@dashboard_group.command("build")
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
+@click.option("--dry-run", is_flag=True, help="Print collected data instead of writing HTML")
+def dashboard_build(output: Path, dry_run: bool) -> None:
+    """Build a static dashboard from Beads issue data."""
+    beads = _json_env("HB_MOCK_BD_READY_JSON")
+    if beads is None:
+        check_bd_available()
+        beads = run_bd_json(["list", "--json"])
+    data = collect_dashboard_data(list(beads or []))
+    if dry_run:
+        click.echo(json.dumps(data, indent=2))
+        return
+    path = write_dashboard(output, data)
+    click.echo(json.dumps({"output": str(path), "items": len(data["items"]), "applied": True}, indent=2))
 
 
 if __name__ == "__main__":

@@ -420,6 +420,29 @@ def test_bridge_dispatch_apply_marks_bead_not_ready(mock_repo_root: Path) -> Non
     assert bead["status"] == "in_progress"
 
 
+def test_bridge_tick_apply_local_file_repeated_has_no_duplicates(mock_repo_root: Path) -> None:
+    init_real_bd_workspace(mock_repo_root, prefix="cli")
+    bead_id = create_ready_bead(mock_repo_root, "Tick local task")
+    queue_file = Path(".hermes-beads/tick-dispatch.json")
+
+    first = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+        mock_repo_root,
+    )
+    second = run_hb(
+        ["bridge", "tick", "--apply", "--backend", "local-file", "--queue-file", str(queue_file)],
+        mock_repo_root,
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert json.loads(first.stdout)["summary"]["dispatch_count"] == 1
+    assert json.loads(second.stdout)["summary"]["dispatch_count"] == 0
+    queue = json.loads((mock_repo_root / queue_file).read_text(encoding="utf-8"))
+    assert len(queue["tasks"]) == 1
+    assert show_bead(mock_repo_root, bead_id)["status"] == "in_progress"
+
+
 def test_bridge_dispatch_apply_hermes_cli_backend_writes_link_after_success(mock_repo_root: Path) -> None:
     init_real_bd_workspace(mock_repo_root, prefix="cli")
     bead_id = create_ready_bead(mock_repo_root, "Hermes CLI backend task")
@@ -563,7 +586,14 @@ def test_result_sync_failed_increments_iteration(mock_repo_root: Path, tmp_path:
     assert operations[-1] == {
         "op": "update-metadata",
         "bead_id": "hb-xaz",
-        "metadata": {"hermes_status": "failed", "hermes_iteration": 3},
+        "metadata": {
+            "hermes_status": "failed",
+            "hermes_iteration": 3,
+            "hermes_gate_status": "pending",
+            "hermes_gate_type": "retry-escalation",
+            "hermes_requires_approval": "true",
+            "hermes_gate_reason": "retry threshold reached: 3",
+        },
     }
 
 
@@ -603,6 +633,61 @@ def test_gate_profile_defaults_architecture_to_planner(mock_repo_root: Path) -> 
     result = run_hb(["bridge", "profile", "hb-a6n", "--dry-run"], mock_repo_root, env=env)
     assert result.returncode == 0
     assert json.loads(result.stdout)["hermes_profile"] == "planner"
+
+
+def test_gate_profile_routes_review_label_to_reviewer(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_SHOW_JSON": json.dumps([bead(id="hb-rev", metadata={}, labels=["pr-gated"])])}
+    result = run_hb(["bridge", "profile", "hb-rev", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["hermes_profile"] == "reviewer"
+    assert data["reason"] == "review gate requested"
+
+
+def test_gates_list_dry_run(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_READY_JSON": json.dumps(
+            [
+                bead(
+                    id="hb-gate",
+                    metadata={
+                        "hermes_requires_approval": "true",
+                        "hermes_gate_status": "pending",
+                        "hermes_gate_type": "human-approval",
+                    },
+                )
+            ]
+        )
+    }
+    result = run_hb(["gates", "list", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["gates"][0]["bead_id"] == "hb-gate"
+
+
+def test_gates_approve_dry_run(mock_repo_root: Path) -> None:
+    env = {
+        "HB_MOCK_BD_SHOW_JSON": json.dumps(
+            [bead(id="hb-gate", metadata={"hermes_gate_status": "pending"})]
+        )
+    }
+    result = run_hb(["gates", "approve", "hb-gate", "--dry-run"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["operation"]["op"] == "approve-gate"
+
+
+def test_dashboard_build_dry_run(mock_repo_root: Path, tmp_path: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-dash", metadata={})])}
+    result = run_hb(["dashboard", "build", "--dry-run", "--output", str(tmp_path / "dash.html")], mock_repo_root, env=env)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["summary"]["total"] == 1
+
+
+def test_tick_dry_run_noop_silent(mock_repo_root: Path) -> None:
+    env = {"HB_MOCK_BD_READY_JSON": "[]"}
+    result = run_hb(["bridge", "tick", "--dry-run", "--silent-noop"], mock_repo_root, env=env)
+    assert result.returncode == 0
+    assert result.stdout == ""
 
 
 # -----------------------------------------------------------------------
