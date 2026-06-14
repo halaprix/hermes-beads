@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Hermes Kanban dispatch bridge is the integration layer between Beads (durable task graph) and Hermes Kanban (execution queue). It reads ready beads from Beads, creates Hermes Kanban tasks, and writes `kanban_task_id` back to the bead's metadata so results sync back to Beads.
+The Hermes Kanban dispatch bridge is the integration layer between Beads (durable task graph) and Hermes Kanban (execution queue). It reads ready beads from Beads, creates Hermes Kanban tasks, and writes `hermes_kanban_task_id` back to the bead's metadata so results sync back to Beads.
 
 ## Architecture
 
@@ -48,6 +48,7 @@ Dispatch planning is split from the Click command in `src/hermes_beads/dispatch_
 This preserves the no-live-mutation contract for this phase: the planner describes what dispatch would do, and the CLI prints the planned create payloads. `hb bridge dispatch --apply --backend local-file --queue-file <path>` replays the same plan into the deterministic queue, writes `metadata.hermes_kanban_task_id` back to Beads, and gates the bead to `in_progress` so it leaves the ready queue. `hb bridge dispatch --apply --backend hermes-cli` uses the real Hermes Kanban CLI, then writes the returned task id back to Beads and gates the bead the same way. The Beads `status` field remains canonical; `hermes_status` is advisory only. Ready beads that already carry a dispatch link are skipped on subsequent runs.
 
 ### Phase 3
+Result-sync idempotency is implemented with `hermes-beads-op:` markers in Beads comments. Re-running the same result record skips already-applied mutations.
 
 
 ### Phase 4
@@ -81,7 +82,8 @@ the caller's project root.
 | Scenario | Behavior |
 |----------|----------|
 | Bead not found | Skip, log |
-| Kanban task creation fails | Retry up to 3 times, then mark bead as failed |
+| Kanban task creation fails | Exit non-zero and leave Beads unchanged |
+| Kanban task creation succeeds but lookup fails | Keep the Beads link/status mutation and return a minimal task id in apply output |
 | Worker timeout | Bridge marks bead as failed with iteration increment |
 | Result sync fails | Keep kanban task open, retry on next bridge run |
 

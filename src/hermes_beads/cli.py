@@ -188,6 +188,7 @@ def build_kanban_payload(bead: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": "beads",
         "source_bead_id": bead_id,
+        "idempotency_key": bead_id,
         "title": f"{bead_id}: {packet['goal']}",
         "assignee": profile,
         "priority": bead.get("priority", 2),
@@ -404,7 +405,14 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
             if bead_id:
                 write_dispatch_link(bead_id, task_id)
                 gate_dispatch_bead(bead_id)
-            task = dispatch_backend.show(task_id)
+            try:
+                task = dispatch_backend.show(task_id)
+            except HermesKanbanBackendError:
+                # The task was already created and linked in Beads. Treat
+                # lookup as best-effort output enrichment so a transient
+                # post-create `show` failure does not turn a successful
+                # mutation into a retryable CLI failure.
+                task = {"id": task_id}
             if task is not None:
                 applied_tasks.append(task)
     except HermesKanbanBackendError as exc:

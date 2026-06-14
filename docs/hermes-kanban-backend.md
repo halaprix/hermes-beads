@@ -25,7 +25,7 @@ export HERMES_HOME="$(mktemp -d)"
 hermes kanban init
 ```
 
-`hermes kanban init` is idempotent and produces no output on success.
+`hermes kanban init` is idempotent. Current builds may print bootstrap guidance on first initialization, but success is still determined by the zero exit code.
 
 ## Boards
 
@@ -44,7 +44,7 @@ Observed shape:
     "default_workdir": null,
     "created_at": null,
     "archived": false,
-    "db_path": "/tmp/.../home/kanban.db",
+    "db_path": "/tmp/.../hermes-data/kanban.db",
     "is_current": true,
     "counts": {},
     "total": 0
@@ -145,7 +145,7 @@ Success output:
 
 ```text
 Claimed t_5b74ab1b
-Workspace: /tmp/.../home/kanban/workspaces/t_5b74ab1b
+Workspace: /tmp/.../hermes-data/kanban/workspaces/t_5b74ab1b
 ```
 
 Contract notes:
@@ -303,6 +303,8 @@ Observed result:
 ```
 
 This confirms the real CLI backend creates exactly one Kanban task per ready bead, writes `metadata.hermes_kanban_task_id` back to Beads after successful creation, marks dispatched beads `in_progress`, and skips already-linked beads on repeat dispatch.
+
+Dispatch payloads include `idempotency_key: <bead_id>`, which the backend passes to `hermes kanban create --idempotency-key`. That closes the retry window where Hermes task creation succeeds but Beads linkage fails before the local metadata write can persist.
 
 ## Stop / Go Decision
 
