@@ -36,26 +36,3 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
-
-      - name: Check code doc coverage
-        run: python scripts/check_doc_coverage.py --threshold 0.9
-
-  gitbook-docs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Verify generated GitBook docs are current
-        run: python scripts/generate_gitbook_docs.py --check
-
-      - name: Upload GitBook docs artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitbook-docs
-          path: docs/

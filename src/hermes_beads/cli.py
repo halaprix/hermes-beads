@@ -706,23 +706,5 @@ def bridge_sync_results(dry_run: bool, apply_ops: bool, results_file: str) -> No
     click.echo(json.dumps({"operations": operations, "applied": apply_ops}, indent=2))
 
 
-@bridge.command("profile")
-@click.argument("bead_id")
-@click.option("--dry-run", is_flag=True, help="Print selected profile without side effects")
-def bridge_profile(bead_id: str, dry_run: bool) -> None:
-    """Select the Hermes profile for a bead using gate/metadata rules."""
-    if not dry_run:
-        click.echo("Error: live profile routing is not implemented; use --dry-run", err=True)
-        sys.exit(1)
-    if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
-        _check_bd_available()
-    bead = get_bead_json(bead_id)
-    if bead is None:
-        click.echo(f"Error: bead '{bead_id}' not found", err=True)
-        sys.exit(1)
-    profile, reason = explain_profile_selection(bead)
-    click.echo(json.dumps({"bead_id": bead_id, "hermes_profile": profile, "reason": reason}, indent=2))
-
-
 if __name__ == "__main__":
     main()
