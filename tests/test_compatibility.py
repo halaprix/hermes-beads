@@ -150,20 +150,6 @@ class TestStandardEmbedded:
         assert second_payload["tasks"] == []
         assert json.loads((tmp_path / queue_file).read_text())["tasks"] == first_payload["tasks"]
 
-    def test_hb_profile_dry_run(self, tmp_path: Path) -> None:
-        _init_temp_beads(tmp_path, prefix="std")
-        bead_id = _create_test_bead(tmp_path, {
-            "hermes_status": "ready",
-            "hermes_profile": "docs",
-            "hermes_mode": "pr",
-        })
-        result = _run_hb(tmp_path, ["bridge", "profile", bead_id, "--dry-run"])
-        assert result.returncode == 0, result.stderr
-        data = json.loads(result.stdout)
-        assert data["bead_id"] == bead_id
-        assert data["hermes_profile"] == "docs"
-        assert "reason" in data
-
 
 class TestStealthEmbedded:
     """Stealth embedded Dolt repo (bd init --stealth)."""
@@ -181,18 +167,6 @@ class TestStealthEmbedded:
         assert len(payload["tasks"]) >= 1
         task = payload["tasks"][0]
         assert task["source_bead_id"] == bead_id
-
-    def test_hb_profile_dry_run(self, tmp_path: Path) -> None:
-        _init_temp_beads(tmp_path, prefix="stl", extra_args=["--stealth"])
-        bead_id = _create_test_bead(tmp_path, {
-            "hermes_status": "ready",
-            "hermes_profile": "ts-dev",
-            "hermes_mode": "pr",
-        })
-        result = _run_hb(tmp_path, ["bridge", "profile", bead_id, "--dry-run"])
-        assert result.returncode == 0, result.stderr
-        data = json.loads(result.stdout)
-        assert data["bead_id"] == bead_id
 
 
 class TestNestedCwd:
@@ -213,21 +187,6 @@ class TestNestedCwd:
         assert len(payload["tasks"]) >= 1
         task = payload["tasks"][0]
         assert task["source_bead_id"] == bead_id
-
-    def test_nested_cwd_profile(self, tmp_path: Path) -> None:
-        repo_root = _init_temp_beads(tmp_path, prefix="nst")
-        bead_id = _create_test_bead(repo_root, {
-            "hermes_status": "ready",
-            "hermes_profile": "ts-dev",
-            "hermes_mode": "pr",
-        })
-        subdir = repo_root / "deep" / "nested" / "path"
-        subdir.mkdir(parents=True)
-        result = _run_hb(subdir, ["bridge", "profile", bead_id, "--dry-run"])
-        assert result.returncode == 0, result.stderr
-        data = json.loads(result.stdout)
-        assert data["bead_id"] == bead_id
-        assert "reason" in data
 
 
 # ===================================================================

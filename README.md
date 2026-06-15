@@ -40,26 +40,9 @@ hb --version
 hb bridge dispatch --dry-run
 hb bridge tick --dry-run
 hb bridge tick --apply --backend local-file --queue-file .hermes-beads/dispatch.json
-hb bridge profile <bead-id> --dry-run
 hb bridge sync-results --dry-run --results-file results.json
 hb bridge sync-results --apply --results-file results.json
-hb dashboard build --output dashboard.html
-hb gates list --dry-run
 ```
-
-## Release gates
-
-The repository CI and local release checks cover:
-
-- privacy scan (`scripts/scan-privacy.sh`)
-- pytest suite
-- generated GitBook docs check
-- docstring coverage gate above 90%
-- non-editable install smoke test (`pip install . && hb --version`)
-
-## Documentation
-
-Full docs live in [`docs/`](docs/README.md).
 
 ## License
 
