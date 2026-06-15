@@ -15,7 +15,6 @@ def mock_repo_root(tmp_path: Path) -> Generator[Path, None, None]:
     """Set up a mock repo with proper directory structure."""
     src_dir = tmp_path / "src" / "hermes_beads"
     src_dir.mkdir(parents=True)
-    (tmp_path / "VERSION").write_text("1.0.0-test\n")
     (src_dir / "__init__.py").write_text("")
     # Copy all .py modules from the package (not just a hardcoded list)
     pkg_src = Path(__file__).parent.parent / "src" / "hermes_beads"
@@ -208,7 +207,7 @@ def read_fake_hermes_log(log_file: Path) -> list[list[str]]:
 def test_version(mock_repo_root: Path) -> None:
     result = run_hb(["--version"], mock_repo_root)
     assert result.returncode == 0
-    assert "1.0.0-test" in result.stdout
+    assert "hermes_beads.cli, version" in result.stdout
 
 
 def test_ready_dry_run(mock_repo_root: Path) -> None:
@@ -642,45 +641,6 @@ def test_gate_profile_routes_review_label_to_reviewer(mock_repo_root: Path) -> N
     data = json.loads(result.stdout)
     assert data["hermes_profile"] == "reviewer"
     assert data["reason"] == "review gate requested"
-
-
-def test_gates_list_dry_run(mock_repo_root: Path) -> None:
-    env = {
-        "HB_MOCK_BD_READY_JSON": json.dumps(
-            [
-                bead(
-                    id="hb-gate",
-                    metadata={
-                        "hermes_requires_approval": "true",
-                        "hermes_gate_status": "pending",
-                        "hermes_gate_type": "human-approval",
-                    },
-                )
-            ]
-        )
-    }
-    result = run_hb(["gates", "list", "--dry-run"], mock_repo_root, env=env)
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["gates"][0]["bead_id"] == "hb-gate"
-
-
-def test_gates_approve_dry_run(mock_repo_root: Path) -> None:
-    env = {
-        "HB_MOCK_BD_SHOW_JSON": json.dumps(
-            [bead(id="hb-gate", metadata={"hermes_gate_status": "pending"})]
-        )
-    }
-    result = run_hb(["gates", "approve", "hb-gate", "--dry-run"], mock_repo_root, env=env)
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["operation"]["op"] == "approve-gate"
-
-
-def test_dashboard_build_dry_run(mock_repo_root: Path, tmp_path: Path) -> None:
-    env = {"HB_MOCK_BD_READY_JSON": json.dumps([bead(id="hb-dash", metadata={})])}
-    result = run_hb(["dashboard", "build", "--dry-run", "--output", str(tmp_path / "dash.html")], mock_repo_root, env=env)
-    assert result.returncode == 0
-    data = json.loads(result.stdout)
-    assert data["summary"]["total"] == 1
 
 
 def test_tick_dry_run_noop_silent(mock_repo_root: Path) -> None:

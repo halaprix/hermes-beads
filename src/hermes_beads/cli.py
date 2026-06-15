@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -16,7 +18,6 @@ from typing import Any
 
 import click
 
-from hermes_beads.bd_helpers import check_bd_available, run_bd, run_bd_json
 from hermes_beads.dispatch_ops import (
     DispatchOpKind,
     build_dispatch_plan,
@@ -28,21 +29,129 @@ from hermes_beads.hermes_kanban_backend import (
 )
 from hermes_beads.result_ops import OpStatus, build_op_id, parse_op_marker
 from hermes_beads.tick_ops import TickLock, TickLockError, build_tick_plan, load_results_file, tick_summary
-from hermes_beads.dashboard import collect_dashboard_data, write_dashboard
-from hermes_beads.gates import bead_requires_review, build_gate_approval_plan, escalation_metadata, gate_for_bead, list_gates
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# ---------------------------------------------------------------------------
+# Inlined bd_helpers: thin subprocess wrappers converting CalledProcessError
+# into click.ClickException so every failure path has an actionable message.
+# ---------------------------------------------------------------------------
+
+
+def _check_bd_available() -> None:
+    """Raise a Click exception if the ``bd`` binary is not on ``PATH``."""
+    if shutil.which("bd") is None:
+        raise click.ClickException(
+            "bd command not found on PATH. Is beads CLI installed?"
+        )
+
+
+def _run_bd(args: list[str]) -> str:
+    """Run ``bd`` with the given args and return stdout as text."""
+    try:
+        result = subprocess.run(
+            ["bd", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        raise click.ClickException(
+            "bd command not found on PATH. Is beads CLI installed?"
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip() if exc.stderr else ""
+        cmd = shlex.join(args)
+        msg = f"bd {cmd} failed"
+        if stderr:
+            msg += f": {stderr}"
+        raise click.ClickException(msg) from exc
+    return result.stdout
+
+
+def _run_bd_json(args: list[str]) -> Any:
+    """Run ``bd`` with the given args and return parsed JSON output."""
+    stdout = _run_bd(args)
+    try:
+        return json.loads(stdout or "null")
+    except json.JSONDecodeError as exc:
+        snippet = (stdout[:200] + "...") if len(stdout or "") > 200 else (stdout or "<empty>")
+        raise click.ClickException(
+            f"bd {shlex.join(args)} returned invalid JSON: {exc}. "
+            f"Output: {snippet}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Inlined gates helpers: only the symbols still used by kept CLI code paths
+# (profile routing, tick filtering, result-sync escalation). The
+# `gates list`/`gates approve` subcommands and the broader gate surface were
+# removed with src/hermes_beads/gates.py.
+# ---------------------------------------------------------------------------
+
+
+REVIEW_LABELS = {"review", "requires-review", "pr-gated", "reviewer"}
+GATE_STATUS_PENDING = "pending"
+GATE_STATUS_APPROVED = "approved"
+
+
+def _truthy(value: Any) -> bool:
+    """Return whether a metadata value should be treated as true."""
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in {"1", "true", "yes", "required", "pending"}
+
+
+def bead_requires_review(bead: dict[str, Any]) -> bool:
+    """Return whether a bead should route through a reviewer profile."""
+    metadata = bead.get("metadata", {}) or {}
+    labels = set(bead.get("labels", []) or [])
+    return _truthy(metadata.get("hermes_requires_review")) or bool(labels & REVIEW_LABELS)
+
+
+def gate_for_bead(bead: dict[str, Any]) -> dict[str, str] | None:
+    """Return a gate record for a bead when gate metadata requests one."""
+    metadata = bead.get("metadata", {}) or {}
+    status = str(metadata.get("hermes_gate_status", "") or "")
+    required = _truthy(metadata.get("hermes_requires_approval")) or status == GATE_STATUS_PENDING
+    if not required:
+        return None
+    return {
+        "bead_id": str(bead.get("id", "")),
+        "title": str(bead.get("title", "")),
+        "gate_type": str(metadata.get("hermes_gate_type", "human-approval") or "human-approval"),
+        "status": status or GATE_STATUS_PENDING,
+        "reason": str(metadata.get("hermes_gate_reason", "") or ""),
+    }
+
+
+def escalation_metadata(iteration: int, threshold: int) -> dict[str, str]:
+    """Return metadata for retry escalation when threshold is reached."""
+    if iteration < threshold:
+        return {}
+    return {
+        "hermes_gate_status": GATE_STATUS_PENDING,
+        "hermes_gate_type": "retry-escalation",
+        "hermes_requires_approval": "true",
+        "hermes_gate_reason": f"retry threshold reached: {iteration}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Version: read from installed package metadata; fall back for source trees.
+# ---------------------------------------------------------------------------
 
 
 def get_version() -> str:
     """Return the installed package version, with a source-tree fallback."""
-    version_file = REPO_ROOT / "VERSION"
-    if version_file.exists():
-        return version_file.read_text().strip()
     try:
         return version("hermes-beads")
     except PackageNotFoundError:
-        return "0+unknown"
+        return "0.0.0+local"
+
+
+# ---------------------------------------------------------------------------
+# Core CLI helpers (bd access + handoff packet construction).
+# ---------------------------------------------------------------------------
 
 
 def _json_env(name: str) -> Any | None:
@@ -58,7 +167,7 @@ def get_bead_json(bead_id: str) -> dict[str, Any] | None:
     if mock_data is not None:
         beads = mock_data
     else:
-        beads = run_bd_json(["show", bead_id, "--json"])
+        beads = _run_bd_json(["show", bead_id, "--json"])
 
     if isinstance(beads, dict):
         beads = [beads]
@@ -73,7 +182,7 @@ def get_ready_beads() -> list[dict[str, Any]]:
     mock_data = _json_env("HB_MOCK_BD_READY_JSON")
     if mock_data is not None:
         return list(mock_data)
-    data = run_bd_json(["ready", "--json"])
+    data = _run_bd_json(["ready", "--json"])
     return list(data or [])
 
 
@@ -122,7 +231,7 @@ def get_comments(bead_id: str, bead: dict[str, Any] | None = None) -> list[dict[
     if embedded:
         return embedded
 
-    return normalize_comments(run_bd_json(["comments", bead_id, "--json"]))
+    return normalize_comments(_run_bd_json(["comments", bead_id, "--json"]))
 
 
 def _dependency_summary(bead: dict[str, Any]) -> list[dict[str, str]]:
@@ -222,12 +331,12 @@ def dispatch_candidates(ready_beads: list[dict[str, Any]]) -> list[dict[str, Any
 
 def write_dispatch_link(bead_id: str, task_id: str) -> None:
     """Write the dispatched task id back to Beads metadata."""
-    run_bd(["update", bead_id, "--set-metadata", f"hermes_kanban_task_id={task_id}"])
+    _run_bd(["update", bead_id, "--set-metadata", f"hermes_kanban_task_id={task_id}"])
 
 
 def gate_dispatch_bead(bead_id: str) -> None:
     """Mark a dispatched bead in_progress so it leaves the ready queue."""
-    run_bd(["update", bead_id, "--status", "in_progress"])
+    _run_bd(["update", bead_id, "--status", "in_progress"])
 
 
 def next_iteration(bead: dict[str, Any]) -> int:
@@ -306,14 +415,14 @@ def apply_result_sync_operations(operations: list[dict[str, Any]]) -> None:
     for operation in operations:
         bead_id = str(operation["bead_id"])
         if operation["op"] == "comment":
-            run_bd(["comments", "add", bead_id, str(operation["body"])])
+            _run_bd(["comments", "add", bead_id, str(operation["body"])])
         elif operation["op"] == "close":
-            run_bd(["close", bead_id, "--reason", str(operation["reason"])])
+            _run_bd(["close", bead_id, "--reason", str(operation["reason"])])
         elif operation["op"] == "update-metadata":
             args = ["update", bead_id]
             for key, value in operation.get("metadata", {}).items():
                 args.extend(["--set-metadata", f"{key}={value}"])
-            run_bd(args)
+            _run_bd(args)
 
 
 def _run_command(args: list[str]) -> None:
@@ -373,7 +482,7 @@ def ready(dry_run: bool) -> None:
         sys.exit(1)
 
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
-        check_bd_available()
+        _check_bd_available()
 
     ready_beads = get_ready_beads()
     if not ready_beads:
@@ -393,7 +502,7 @@ def handoff(bead_id: str, dry_run: bool) -> None:
         sys.exit(1)
 
     if _json_env("HB_MOCK_BD_SHOW_JSON") is None and _json_env("HB_MOCK_BD_COMMENTS_JSON") is None:
-        check_bd_available()
+        _check_bd_available()
 
     bead = get_bead_json(bead_id)
     if bead is None:
@@ -426,7 +535,7 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
-        check_bd_available()
+        _check_bd_available()
     ready_beads = get_ready_beads()
     dispatch_beads = dispatch_candidates(ready_beads)
     plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
@@ -513,7 +622,7 @@ def bridge_tick(
     if dry_run == apply_ops:
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
-    check_bd_available()
+    _check_bd_available()
     if dry_run:
         ready_beads = get_ready_beads()
         dispatch_beads = [bead for bead in dispatch_candidates(ready_beads) if not gate_for_bead(bead)]
@@ -530,7 +639,7 @@ def bridge_tick(
             if git_pull:
                 _run_command(["git", "pull", "--rebase"])
             if bd_pull:
-                run_bd(["dolt", "pull"])
+                _run_bd(["dolt", "pull"])
             ready_beads = get_ready_beads()
             dispatch_beads = [bead for bead in dispatch_candidates(ready_beads) if not gate_for_bead(bead)]
             results = load_results_file(results_file)
@@ -549,7 +658,7 @@ def bridge_tick(
                 result_operations = build_result_sync_operations(list(result_list), existing_comments)
                 apply_result_sync_operations(result_operations)
             if bd_push:
-                run_bd(["dolt", "push"])
+                _run_bd(["dolt", "push"])
             if git_push:
                 _run_command(["git", "push"])
     except (TickLockError, HermesKanbanBackendError, click.ClickException) as exc:
@@ -580,7 +689,7 @@ def bridge_sync_results(dry_run: bool, apply_ops: bool, results_file: str) -> No
         click.echo("Error: choose exactly one of --dry-run or --apply", err=True)
         sys.exit(1)
     if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
-        check_bd_available()
+        _check_bd_available()
     results = json.loads(Path(results_file).read_text())
     if isinstance(results, dict):
         results = results.get("results", [])
@@ -606,81 +715,13 @@ def bridge_profile(bead_id: str, dry_run: bool) -> None:
         click.echo("Error: live profile routing is not implemented; use --dry-run", err=True)
         sys.exit(1)
     if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
-        check_bd_available()
+        _check_bd_available()
     bead = get_bead_json(bead_id)
     if bead is None:
         click.echo(f"Error: bead '{bead_id}' not found", err=True)
         sys.exit(1)
     profile, reason = explain_profile_selection(bead)
     click.echo(json.dumps({"bead_id": bead_id, "hermes_profile": profile, "reason": reason}, indent=2))
-
-
-@main.group("gates")
-def gates_group() -> None:
-    """Inspect and plan approval-gate operations."""
-
-
-@gates_group.command("list")
-@click.option("--dry-run", is_flag=True, help="List gates without mutating")
-def gates_list(dry_run: bool) -> None:
-    """List pending approval gates from open Beads issues."""
-    if not dry_run:
-        click.echo("Error: gates list is dry-run only", err=True)
-        sys.exit(1)
-    beads = _json_env("HB_MOCK_BD_READY_JSON")
-    if beads is None:
-        check_bd_available()
-        beads = run_bd_json(["list", "--status=open", "--json"])
-    click.echo(json.dumps({"gates": list_gates(list(beads or [])), "applied": False}, indent=2))
-
-
-@gates_group.command("approve")
-@click.argument("bead_id")
-@click.option("--dry-run", is_flag=True, help="Print approval plan without mutating")
-def gates_approve(bead_id: str, dry_run: bool) -> None:
-    """Plan approval of a single gate."""
-    if not dry_run:
-        click.echo("Error: gate approval apply is not implemented; use --dry-run", err=True)
-        sys.exit(1)
-    if _json_env("HB_MOCK_BD_SHOW_JSON") is None:
-        check_bd_available()
-    bead = get_bead_json(bead_id)
-    if bead is None:
-        click.echo(f"Error: bead '{bead_id}' not found", err=True)
-        sys.exit(1)
-    click.echo(json.dumps({"operation": build_gate_approval_plan(bead), "applied": False}, indent=2))
-
-
-@main.group("dashboard")
-def dashboard_group() -> None:
-    """Build read-only static dashboard artifacts."""
-
-
-@dashboard_group.command("build")
-@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
-@click.option("--dry-run", is_flag=True, help="Print collected data instead of writing HTML")
-def dashboard_build(output: Path, dry_run: bool) -> None:
-    """Build a static dashboard from Beads issue data."""
-    beads = _json_env("HB_MOCK_BD_READY_JSON")
-    if beads is None:
-        check_bd_available()
-        beads = run_bd_json(["list", "--json"])
-    data = collect_dashboard_data(list(beads or []))
-    if dry_run:
-        rendered = json.dumps(data, indent=2)
-        try:
-            from hermes_beads.dashboard import assert_public_safe_dashboard
-
-            assert_public_safe_dashboard(rendered)
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from exc
-        click.echo(rendered)
-        return
-    try:
-        path = write_dashboard(output, data)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(json.dumps({"output": str(path), "items": len(data["items"]), "applied": True}, indent=2))
 
 
 if __name__ == "__main__":
