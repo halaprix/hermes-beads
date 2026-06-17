@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 
 from hermes_beads.bead_model import BeadNode, BeadEdge, BeadGraph, BeadStatus
 from hermes_beads.bead_reader import discover_projects, read_project_beads
+from hermes_beads.graph_builder import build_graph_raw
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
@@ -99,35 +100,7 @@ async def project_graph(project_name: str):
         )
 
     beads = read_project_beads(project.path)
-    nodes = []
-    edges = []
-
-    for bead in beads:
-        color = _STATUS_COLORS.get(bead.status, "#aaaaaa")
-        nodes.append(BeadNode(
-            id=bead.id,
-            label=bead.id,
-            title=bead.title or bead.id,
-            status=bead.status,
-            priority=bead.priority,
-            group=bead.status.value,
-        ).model_dump())
-
-        # Dependency edges: beads that block this one
-        for dep in bead.dependencies:
-            if dep.type == "blocks" and dep.depends_on_id:
-                edges.append(BeadEdge(
-                    from_=dep.depends_on_id,
-                    to=bead.id,
-                    arrows="to",
-                ).model_dump(by_alias=True))
-
-    return {
-        "project": project_name,
-        "nodes": nodes,
-        "edges": edges,
-        "bead_count": len(nodes),
-    }
+    return build_graph_raw(beads, project_name=project_name)
 
 
 # ── health check ───────────────────────────────────────────────────────
