@@ -20,6 +20,11 @@ dependencies = [
     "click>=8.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.scripts]
 hb = "hermes_beads.cli:main"
 
