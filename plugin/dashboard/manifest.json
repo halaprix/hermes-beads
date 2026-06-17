@@ -1,0 +1,14 @@
+{
+  "name": "hermes-beads",
+  "label": "Beads",
+  "description": "Visual task graph (DAG) for Beads issues — see what's blocked, ready, and in progress at a glance. Click nodes to inspect, dispatch, or close beads.",
+  "icon": "GitGraph",
+  "version": "2.0.0-alpha.1",
+  "tab": {
+    "path": "/beads",
+    "position": "after:skills"
+  },
+  "slots": [],
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
