@@ -16,6 +16,7 @@
   const { useState, useEffect, useRef, useCallback } = SDK.hooks;
   const { Card, CardContent, Button, Badge, Input, Select, SelectOption } = SDK.components;
   const cn = SDK.utils.cn || function () { return Array.from(arguments).filter(Boolean).join(" "); };
+  const fetchJSON = SDK.fetchJSON;
 
   const API_BASE = "/api/plugins/hermes-beads/api";
   const REFRESH_MS = 30000;
@@ -23,21 +24,9 @@
   const STATUS_COLORS = { open: "#00ff88", in_progress: "#ffaa00", blocked: "#ff4477", closed: "#666", deferred: "#888" };
   const STATUS_LABELS = { open: "Ready", in_progress: "In Progress", blocked: "Blocked", closed: "Closed", deferred: "Deferred" };
 
-  // ── API helpers ───────────────────────────────────────────────────
-  async function apiGet(path) {
-    const resp = await fetch(API_BASE + path);
-    if (!resp.ok) throw new Error(resp.status + "");
-    return resp.json();
-  }
-  async function apiPost(path, body) {
-    const resp = await fetch(API_BASE + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) throw new Error(resp.status + "");
-    return resp.json();
-  }
+  // ── API helpers (uses SDK.fetchJSON for auth) ────────────────────
+  function apiGet(path) { return fetchJSON(API_BASE + path); }
+  function apiPost(path, body) { return fetchJSON(API_BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
 
   // ── Graph renderer (imperative, called from useEffect) ────────────
   function renderVisNetwork(container, nodes, edges, onNodeClick) {
