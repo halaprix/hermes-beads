@@ -1,9 +1,41 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.0-alpha.1] — 2026-06-17
+
+### Added
+
+- **Dashboard plugin:** visual bead DAG with vis-network, neon glow theme,
+  project selector, status filters, search, dispatch buttons, gate resolver,
+  30s auto-refresh, keyboard shortcuts.
+- `bead_model.py` — Pydantic models (Bead, BeadDependency, BeadGraph, etc.)
+- `bead_reader.py` — JSONL parser with `discover_projects()` and `read_project_beads()`
+- `graph_builder.py` — vis-network-compatible node/edge builder with status
+  colours and priority-scaled sizing
+- Plugin API endpoints: `/api/projects`, `/api/projects/<name>/beads`,
+  `/api/projects/<name>/graph`, `/api/projects/<name>/dispatch`,
+  `/api/projects/<name>/gate/<id>`
 
 ### Changed
 
-- **Chore:** synced repo rules with leakwatch standard — added `.commitlintrc.json`, `.editorconfig`, `.cspell.json`, issue templates, dependabot config, markdown-link-check config, and upgraded privacy scanner to allowlist-based v2. Rewrote `AGENTS.md` with full rules (privacy, git workflow, SemVer, code review, build-in-public etiquette, coding agent specifics, subagent discipline). Rewrote `CONTRIBUTING.md` with detailed PR workflow and commit message examples. Rewrote `PULL_REQUEST_TEMPLATE.md` with checklist-based format. Added `[dev]` extras to `pyproject.toml`.
+- **Deprecated standalone `hb` CLI** — dashboard plugin is the primary interface
+- **Synced repo rules** with leakwatch standard — `.commitlintrc.json`,
+  `.editorconfig`, `.cspell.json`, issue templates, dependabot config,
+  markdown-link-check config, upgraded privacy scanner
+- Rewrote `AGENTS.md`, `CONTRIBUTING.md`, `PULL_REQUEST_TEMPLATE.md`
+- Added `pydantic>=2.0` dependency, `[dev]` extras with `pytest>=8.0`
+- Upgraded CI to multi-job gate (hygiene → test → docs → all-green)
 
-- **Refactor:** stripped cargo-cult packaging ceremony. Removed GitBook docs, PyPI publish workflow, docstring coverage gate, dry-run-only `gates` and `dashboard` modules, and unused helpers. Bridge surface (bd ↔ Hermes Kanban dispatch, result-sync idempotency, tick/cron) is unchanged. See `~/.hermes/plans/2026-06-15-hermes-beads-slim-down.md` for the rationale.
+### Removed
+
+- `Makefile` (replaced by `python -m pytest`)
+- `scripts/scan-privacy.sh` (replaced by `scripts/privacy-scan.sh` v2)
+- Compiled `build/` artifacts
+
+## [1.1.0a1]
+
+### Changed
+
+- **Refactor:** stripped cargo-cult packaging ceremony. Removed GitBook docs,
+  PyPI publish workflow, docstring coverage gate, dry-run-only `gates` and
+  `dashboard` modules, and unused helpers. Bridge surface (bd ↔ Hermes
+  Kanban dispatch, result-sync idempotency, tick/cron) is unchanged.
