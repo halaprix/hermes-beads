@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **CI commitlint:** replaced `wagoid/commitlint-github-action@v6` (Docker Node 20, incompatible with GitHub Actions Node 24) with direct `npx @commitlint/cli` call.
+
 ## [2.0.0-alpha.2] — 2026-06-17
 
 ### Changed

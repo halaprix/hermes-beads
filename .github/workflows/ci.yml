@@ -27,11 +27,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate Conventional Commits in PR title
+      - name: Validate Conventional Commits
         if: github.event_name == 'pull_request'
-        uses: wagoid/commitlint-github-action@v6
-        with:
-          configFile: .commitlintrc.json
+        run: |
+          npx --yes @commitlint/cli \
+            --from ${{ github.event.pull_request.base.sha }} \
+            --to ${{ github.event.pull_request.head.sha }} \
+            --config .commitlintrc.json \
+            --verbose
 
       - name: Run privacy scan
         run: |
