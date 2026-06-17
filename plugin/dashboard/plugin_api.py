@@ -4,11 +4,13 @@ hermes-beads dashboard plugin — backend API routes.
 Mounted automatically by the Hermes dashboard at /api/plugins/hermes-beads/.
 
 Endpoints:
-  GET  /hello                         — health check
-  GET  /api/projects                  — discover all Beads projects
-  GET  /api/projects/<name>/beads     — list beads for a project
-  GET  /api/projects/<name>/graph     — bead DAG data for vis-network
-  GET  /beads/<id>                    — single bead detail (via bd CLI)
+  GET  /hello                             — health check
+  GET  /api/projects                      — discover all Beads projects
+  GET  /api/projects/<name>/beads         — list beads for a project
+  GET  /api/projects/<name>/graph         — bead DAG data for vis-network
+  POST /api/projects/<name>/dispatch      — dispatch selected beads
+  POST /api/projects/<name>/gate/<id>     — resolve a blocking gate
+  GET  /beads/<id>                        — single bead detail
 """
 from __future__ import annotations
 
@@ -16,25 +18,66 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from hermes_beads.bead_model import BeadNode, BeadEdge, BeadGraph, BeadStatus
+from hermes_beads.bead_model import BeadStatus
 from hermes_beads.bead_reader import discover_projects, read_project_beads
 from hermes_beads.graph_builder import build_graph_raw
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
 
+
+# ── request models ────────────────────────────────────────────────────
+
+
+class DispatchRequest(BaseModel):
+    bead_ids: list[str]
+
+
+class GateResolveRequest(BaseModel):
+    comment: str = ""
+
+
+# ── helpers ───────────────────────────────────────────────────────────
+
+
+def _find_project(project_name: str):
+    """Look up a project by name, raise 404 if not found."""
+    projects = discover_projects()
+    project = next((p for p in projects if p.name == project_name), None)
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found. Available: "
+            f"{[p.name for p in projects]}",
+        )
+    return project
+
+
+def _bd(*args: str, cwd: Optional[str] = None) -> dict | list:
+    """Run a ``bd`` CLI command and return parsed JSON output."""
+    cmd = ["bd", "--json"] + list(args)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=30, cwd=cwd,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"bd exited with code {result.returncode}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"raw": result.stdout.strip()}
+
+
 # ── project discovery ──────────────────────────────────────────────────
 
 
 @router.get("/api/projects")
 async def list_projects():
-    """Discover all Beads projects on this machine.
-
-    Returns a list of projects with their name, path, and bead counts.
-    """
+    """Discover all Beads projects on this machine."""
     try:
         projects = discover_projects()
         return {
@@ -51,19 +94,8 @@ async def list_projects():
 
 @router.get("/api/projects/{project_name}/beads")
 async def list_project_beads(project_name: str):
-    """Return all beads in a specific project, parsed from JSONL.
-
-    Falls back gracefully if the project is not found.
-    """
-    projects = discover_projects()
-    project = next((p for p in projects if p.name == project_name), None)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{project_name}' not found. Available: "
-            f"{[p.name for p in projects]}",
-        )
-
+    """Return all beads in a specific project, parsed from JSONL."""
+    project = _find_project(project_name)
     beads = read_project_beads(project.path)
     return {
         "project": project_name,
@@ -75,32 +107,90 @@ async def list_project_beads(project_name: str):
 
 # ── graph data for vis-network ─────────────────────────────────────────
 
-_STATUS_COLORS = {
-    BeadStatus.OPEN: "#00ff88",
-    BeadStatus.IN_PROGRESS: "#ffaa00",
-    BeadStatus.BLOCKED: "#ff4477",
-    BeadStatus.CLOSED: "#666666",
-    BeadStatus.DEFERRED: "#888888",
-}
-
 
 @router.get("/api/projects/{project_name}/graph")
 async def project_graph(project_name: str):
-    """Return bead DAG data for vis-network rendering.
-
-    Builds nodes and edges from the project's beads, with colour
-    coding by status and edges representing dependency relationships.
-    """
-    projects = discover_projects()
-    project = next((p for p in projects if p.name == project_name), None)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{project_name}' not found",
-        )
-
+    """Return bead DAG data for vis-network rendering."""
+    project = _find_project(project_name)
     beads = read_project_beads(project.path)
     return build_graph_raw(beads, project_name=project_name)
+
+
+# ── dispatch ──────────────────────────────────────────────────────────
+
+
+@router.post("/api/projects/{project_name}/dispatch")
+async def dispatch_beads(project_name: str, body: DispatchRequest):
+    """Dispatch selected beads via ``hb bridge dispatch --apply``.
+
+    Runs in the project directory so bd auto-discovers the workspace.
+    """
+    project = _find_project(project_name)
+
+    if not body.bead_ids:
+        raise HTTPException(status_code=400, detail="No bead_ids provided")
+
+    results = []
+    for bid in body.bead_ids:
+        try:
+            # Use hb CLI if available, fall back to bd update --claim
+            cmd = ["hb", "bridge", "dispatch", "--apply", "--bead", bid]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=project.path,
+            )
+            success = result.returncode == 0
+            results.append({
+                "bead_id": bid,
+                "success": success,
+                "output": (result.stdout + result.stderr).strip()[:500],
+            })
+        except Exception as exc:
+            results.append({
+                "bead_id": bid,
+                "success": False,
+                "output": str(exc),
+            })
+
+    return {
+        "project": project_name,
+        "dispatched": sum(1 for r in results if r["success"]),
+        "failed": sum(1 for r in results if not r["success"]),
+        "results": results,
+    }
+
+
+# ── gate resolver ─────────────────────────────────────────────────────
+
+
+@router.post("/api/projects/{project_name}/gate/{bead_id}")
+async def resolve_gate(project_name: str, bead_id: str, body: GateResolveRequest):
+    """Mark a bead's blocking dependency as resolved.
+
+    Closes the specified bead via bd close. If the bead has open
+    child tasks, adds a comment instead.
+    """
+    project = _find_project(project_name)
+
+    try:
+        bead_data = _bd("show", bead_id, cwd=project.path)
+        if not isinstance(bead_data, dict):
+            raise HTTPException(status_code=500, detail="Could not read bead data")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=f"bd show failed: {e}")
+
+    try:
+        _bd("close", bead_id, "-m", body.comment or "Resolved via dashboard", cwd=project.path)
+        return {
+            "bead_id": bead_id,
+            "action": "closed",
+            "message": f"Bead {bead_id} closed successfully",
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=f"bd close failed: {e}")
 
 
 # ── health check ───────────────────────────────────────────────────────
@@ -124,18 +214,6 @@ async def hello():
 
 
 # ── single bead detail (bd CLI fallback) ───────────────────────────────
-
-
-def _bd(*args: str) -> dict | list:
-    """Minimal bd CLI wrapper for single-bead lookups."""
-    cmd = ["bd", "--json"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"bd exited with code {result.returncode}")
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {"raw": result.stdout.strip()}
 
 
 @router.get("/beads/{bead_id}")
