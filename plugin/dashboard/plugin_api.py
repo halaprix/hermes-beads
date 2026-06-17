@@ -130,6 +130,14 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
     if not body.bead_ids:
         raise HTTPException(status_code=400, detail="No bead_ids provided")
 
+    # Check if hb CLI is available before attempting dispatch
+    import shutil
+    if not shutil.which("hb"):
+        raise HTTPException(
+            status_code=503,
+            detail="hb CLI not found on PATH. Install hermes-beads to enable dispatch."
+        )
+
     results = []
     for bid in body.bead_ids:
         try:
@@ -216,11 +224,12 @@ async def hello():
 # ── single bead detail (bd CLI fallback) ───────────────────────────────
 
 
-@router.get("/beads/{bead_id}")
-async def show_bead(bead_id: str):
-    """Show detail for a single bead via bd CLI."""
+@router.get("/api/projects/{project_name}/beads/{bead_id}")
+async def show_bead(project_name: str, bead_id: str):
+    """Show detail for a single bead via bd CLI, scoped to a project."""
+    project = _find_project(project_name)
     try:
-        data = _bd("show", bead_id)
-        return {"bead_id": bead_id, "bead": data}
+        data = _bd("show", bead_id, cwd=project.path)
+        return {"bead_id": bead_id, "project": project_name, "bead": data}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))

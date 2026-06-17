@@ -2,6 +2,14 @@
 Beads data reader — discovers projects and parses .beads/issues.jsonl files.
 
 Operates purely on disk (no bd CLI dependency) for fast dashboard reads.
+
+Project discovery is configurable via three mechanisms (first wins):
+  1. ``HERMES_BEADS_PROJECT_DIRS`` env var — colon-separated paths
+  2. ``~/.config/hermes-beads/projects.json`` — ``{"scan_roots": [...]}``
+  3. Default: ``~/workspace``
+
+Users who keep Beads projects outside ``~/workspace`` can set the env var
+or write a small config file — no need to edit plugin source.
 """
 from __future__ import annotations
 
@@ -13,17 +21,55 @@ from typing import Optional
 
 from hermes_beads.bead_model import Bead, BeadDependency, BeadProject, BeadStatus, BeadPriority
 
-# Known project locations to scan. Ordered: more specific first.
-# Entries that contain a .beads/ directory themselves are treated as
-# direct projects; entries that are parent directories are scanned
-# for child projects (iterdir).
-_SCAN_ROOTS = [
-    Path.home() / "workspace",
-    Path.home() / "leakwatch",
-]
 
-# Extra explicit paths that may not be under ~/workspace
-_EXPLICIT_PROJECTS: list[Path] = []
+# ═══════════════════════════════════════════════════════════════════════
+#  Config resolution
+# ═══════════════════════════════════════════════════════════════════════
+
+def _load_scan_roots() -> list[Path]:
+    """Resolve scan roots in priority order: env var > config file > default.
+
+    Returns a list of absolute ``Path`` objects.  Directories that do not
+    exist on disk are silently dropped so a config shared across machines
+    doesn't break.
+    """
+    # 1. Environment variable (highest priority)
+    env_val = os.getenv("HERMES_BEADS_PROJECT_DIRS", "").strip()
+    if env_val:
+        return _expand_paths(env_val.split(":"))
+
+    # 2. Config file
+    config_path = Path.home() / ".config" / "hermes-beads" / "projects.json"
+    try:
+        if config_path.is_file():
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "scan_roots" in data:
+                roots = data["scan_roots"]
+                if isinstance(roots, list):
+                    return _expand_paths(roots)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        pass
+
+    # 3. Default: ~/workspace (standard Beads convention)
+    return _expand_paths(["~/workspace"])
+
+
+def _expand_paths(paths: list[str]) -> list[Path]:
+    """Expand user prefixes and drop non-existent directories."""
+    resolved: list[Path] = []
+    for raw in paths:
+        raw = raw.strip()
+        if not raw:
+            continue
+        p = Path(raw).expanduser().resolve()
+        if p.is_dir():
+            resolved.append(p)
+    return resolved
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Tag extraction
+# ═══════════════════════════════════════════════════════════════════════
 
 
 def _extract_tags(bead: Bead) -> list[str]:
@@ -174,23 +220,27 @@ def _register_project(
     )
 
 
-def discover_projects() -> list[BeadProject]:
-    """Scan known locations for Beads projects (.beads/issues.jsonl files).
+def discover_projects(scan_roots: Optional[list[Path]] = None) -> list[BeadProject]:
+    """Scan for Beads projects (.beads/issues.jsonl files).
 
     Two scanning strategies:
-    1. Direct: if a scan root itself contains .beads/, register it.
-    2. Iterdir: scan subdirectories of each root for .beads/.
+    1. **Direct**: if a scan root itself contains ``.beads/``, register it.
+    2. **Iterdir**: scan subdirectories of each root for ``.beads/``.
+
+    Args:
+        scan_roots: Optional override list of directories to scan.  When
+            ``None`` (default), roots are resolved via env var / config file
+            / ``~/workspace`` fallback (see ``_load_scan_roots``).
 
     Returns:
         List of BeadProject objects with name, path, and bead counts.
     """
+    if scan_roots is None:
+        scan_roots = _load_scan_roots()
+
     projects: dict[str, BeadProject] = {}
 
-    # Scan explicit paths first
-    all_roots = [Path(p) for p in _EXPLICIT_PROJECTS if Path(p).is_dir()]
-    all_roots.extend([p for p in _SCAN_ROOTS if p.is_dir()])
-
-    for root in all_roots:
+    for root in scan_roots:
         # Strategy 1: check if the root itself is a bead project
         if (root / ".beads" / "issues.jsonl").is_file():
             _register_project(projects, root)
