@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.0-alpha.2] — 2026-06-17
+
+### Changed
+
+- **Configurable scan roots:** project discovery now uses three-tier resolution
+  (env var → config file → default `~/workspace`) instead of hardcoded paths.
+  No code changes needed to add custom project directories.
+- **Added `build` to dev dependencies** (fixes test failures on clean Python 3.12).
+- **Version alignment:** manifest, pyproject, and changelog now agree on `2.0.0-alpha.2`.
+
 ## [2.0.0-alpha.1] — 2026-06-17
 
 ### Added

@@ -1,6 +1,6 @@
 /**
  * hermes-beads Dashboard Plugin — interactive bead DAG viewer
- * v2.0.0-alpha.1
+ * v2.0.0-alpha.2
  *
  * Uses Hermes Plugin SDK (React + shadcn). Renders a vis-network DAG
  * with neon glow styling, status filters, search, dispatch, and gate resolve.
@@ -118,6 +118,7 @@
     const [search, setSearch] = useState("");
     const [selectedNode, setSelectedNode] = useState(null);
     const [visLoaded, setVisLoaded] = useState(false);
+    const [lastError, setLastError] = useState(null);
     const graphRef = useRef(null);
     const networkRef = useRef(null);
     const { toast, show } = useToast();
@@ -139,7 +140,7 @@
         const hb = (d.projects || []).find(p => p.name === "hermes-beads");
         if (hb) setProject("hermes-beads");
         else if (d.projects?.length) setProject(d.projects[0].name);
-      }).catch(() => {});
+      }).catch(e => setError(e.message || "Failed to load projects"));
     }, []);
 
     // Load graph when project changes
@@ -180,11 +181,19 @@
       if (!project) return;
       const timer = setInterval(() => {
         apiGet("/projects/" + encodeURIComponent(project) + "/graph")
-          .then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); })
-          .catch(() => {});
+          .then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); setLastError(null); })
+          .catch(e => setLastError(e.message || "Refresh failed"));
       }, REFRESH_MS);
       return () => clearInterval(timer);
     }, [project]);
+
+    // Escape key: close detail panel
+    useEffect(() => {
+      if (!selectedNode) return;
+      const onKey = (e) => { if (e.key === "Escape") setSelectedNode(null); };
+      document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }, [selectedNode]);
 
     const handleDispatch = async (beadId) => {
       show("Dispatching " + beadId + "…", "info");
@@ -226,7 +235,7 @@
         h(Input, { placeholder: "Search beads…", value: search, onChange: e => setSearch(e.target.value), style: { width: 160, background: "#1a1a2e", color: "#fff", border: "1px solid #333" } }),
         h("span", { style: { color: "#666", fontSize: 12 } }, nodes.length + " beads"),
         h("span", { style: { flex: 1 } }),
-        h(Button, { size: "sm", variant: "outline", onClick: () => { if (project) { setLoading(true); apiGet("/projects/" + encodeURIComponent(project) + "/graph").then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); }).catch(() => {}).finally(() => setLoading(false)); } } }, "🔄 Refresh"),
+        h(Button, { size: "sm", variant: "outline", onClick: () => { if (project) { setLoading(true); apiGet("/projects/" + encodeURIComponent(project) + "/graph").then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); setLastError(null); }).catch(e => show("❌ " + (e.message || "Refresh failed"), "error")).finally(() => setLoading(false)); } } }, "🔄 Refresh"),
       ),
       // Filters
       h("div", { style: { padding: "4px 14px", borderBottom: "1px solid #222", display: "flex", gap: 6, flexWrap: "wrap" } },
@@ -254,7 +263,8 @@
       ),
       // Footer
       h("div", { style: { padding: "3px 14px", borderTop: "1px solid #222", fontSize: 11, color: "#555", display: "flex", gap: 16 } },
-        h("span", null, "Click: detail"), h("span", null, "Dbl-click: zoom"), h("span", null, "Esc: close panel"), h("span", null, "30s auto-refresh")
+        h("span", null, "Click: detail"), h("span", null, "Dbl-click: zoom"), h("span", null, "Esc: close panel"), h("span", null, "30s auto-refresh"),
+        lastError && h("span", { style: { color: "#ff6644", marginLeft: "auto" } }, "⚠ " + lastError)
       ),
       // Toast
       toast && h("div", {
