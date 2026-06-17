@@ -28,7 +28,7 @@ jobs:
 
       - name: Validate Conventional Commits in PR title
         if: github.event_name == 'pull_request'
-        uses: wagoid/commitlint-github-action@v5
+        uses: wagoid/commitlint-github-action@v6
         with:
           configFile: .commitlintrc.json
 
