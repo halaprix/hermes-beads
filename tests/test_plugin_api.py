@@ -175,9 +175,9 @@ class TestShowBead:
 class TestGateResolver:
     def test_gate_resolve_closes_bead(self, client):
         with patch("plugin.dashboard.plugin_api._bd") as mock_bd:
-            # First call: show (no children), second call: close
+            # bd show returns array, bd close returns empty
             mock_bd.side_effect = [
-                {"id": "hb-test1", "children": []},  # show
+                [{"id": "hb-test1", "dependents": []}],  # show
                 {},  # close
             ]
             resp = client.post(
@@ -189,10 +189,12 @@ class TestGateResolver:
 
     def test_gate_resolve_blocks_on_children(self, client):
         with patch("plugin.dashboard.plugin_api._bd") as mock_bd:
-            mock_bd.return_value = {
+            mock_bd.return_value = [{
                 "id": "hb-test1",
-                "children": [{"id": "child1", "status": "open"}],
-            }
+                "dependents": [
+                    {"id": "child1", "status": "open", "title": "Child task"},
+                ],
+            }]
             resp = client.post(
                 "/api/projects/test-project/gate/hb-test1",
                 json={},

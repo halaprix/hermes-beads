@@ -17,6 +17,7 @@ from hermes_beads.dispatch_ops import (
     build_dispatch_plan,
 )
 from hermes_beads.local_file_backend import LocalFileQueueBackend
+from hermes_beads.cli import build_kanban_payload  # real payload builder with comments/assignee/status
 
 # ---------------------------------------------------------------------------
 # Thin bd subprocess wrappers (replicated from cli.py to avoid Click deps)
@@ -97,34 +98,8 @@ def _gate_dispatch_bead(bead_id: str, cwd: str) -> None:
     _bd_run(["update", bead_id, "--status", "in_progress"], cwd)
 
 
-def _build_kanban_payload(bead: dict[str, Any]) -> dict[str, Any]:
-    """Build a Hermes Kanban task payload from a bead."""
-    return {
-        "source_bead_id": bead.get("id", ""),
-        "title": bead.get("title", ""),
-        "priority": _map_priority(bead.get("priority", "P1")),
-        "description": str(bead.get("description") or ""),
-        "metadata": {
-            "bead_id": bead.get("id", ""),
-            "bead_type": bead.get("type", ""),
-            "bead_project": bead.get("project", ""),
-        },
-        "tags": _extract_tags(bead),
-    }
-
-
-def _map_priority(prio: str) -> int:
-    """Map P0..P3 to numeric priority (88 → 16)."""
-    mapping = {"P0": 88, "P1": 64, "P2": 32, "P3": 16}
-    return mapping.get(str(prio).upper(), 32)
-
-
-def _extract_tags(bead: dict[str, Any]) -> list[str]:
-    """Extract labels/tags from bead metadata."""
-    labels = bead.get("labels", [])
-    if isinstance(labels, list):
-        return [str(l) for l in labels if l]
-    return []
+# The real payload builder (with comments, assignee mapping, status sync,
+# metadata iteration) is imported from hermes_beads.cli at top of file.
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +141,8 @@ def dispatch_bead(
     if not candidates:
         raise DispatchError(f"Bead '{bead_id}' is already linked to a Kanban task")
 
-    # 3. Build dispatch plan
-    plan = build_dispatch_plan(candidates, payload_builder=_build_kanban_payload)
+    # 3. Build dispatch plan using the real payload builder
+    plan = build_dispatch_plan(candidates, payload_builder=build_kanban_payload)
     create_ops = [op for op in plan if op.kind is DispatchOpKind.CREATE]
     if not create_ops:
         raise DispatchError(f"No dispatchable operations for bead '{bead_id}'")

@@ -217,12 +217,14 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
 
 
 def _bead_has_open_children(bead_data: dict) -> bool:
-    """Check if a bead has open child tasks."""
-    children = bead_data.get("children", [])
-    if not children:
+    """Check if a bead has open child tasks in its dependents list."""
+    dependents = bead_data.get("dependents", [])
+    if not dependents:
         return False
-    for child in children:
-        status = child.get("status", "")
+    for dep in dependents:
+        if not isinstance(dep, dict):
+            continue
+        status = dep.get("status", "")
         if status in ("open", "in_progress"):
             return True
     return False
@@ -240,6 +242,11 @@ async def resolve_gate(project_name: str, bead_id: str, body: GateResolveRequest
 
     try:
         bead_data = _bd("show", bead_id, cwd=project.path)
+        # bd show --json returns an array — unwrap the first element
+        if isinstance(bead_data, list):
+            if not bead_data:
+                raise HTTPException(status_code=422, detail=f"Bead '{bead_id}' not found")
+            bead_data = bead_data[0]
         if not isinstance(bead_data, dict):
             raise HTTPException(status_code=500, detail="Could not read bead data")
     except RuntimeError as e:
