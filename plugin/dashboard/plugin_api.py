@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,30 @@ from hermes_beads.graph_builder import build_graph_raw
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── in-memory request cache ───────────────────────────────────────────
+
+_cache: dict[str, tuple[float, object]] = {}
+CACHE_TTL = 10  # seconds
+
+
+def _cache_get(key: str):
+    """Return cached value if fresh, otherwise None."""
+    entry = _cache.get(key)
+    if entry and (time.monotonic() - entry[0]) < CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _cache_set(key: str, value: object):
+    _cache[key] = (time.monotonic(), value)
+
+
+def _cache_bust(prefix: str):
+    """Remove all cache entries matching a prefix."""
+    for k in list(_cache):
+        if k.startswith(prefix):
+            del _cache[k]
 
 
 # ── request models ────────────────────────────────────────────────────
@@ -78,12 +103,17 @@ def _bd(*args: str, cwd: Optional[str] = None) -> dict | list:
 @router.get("/api/projects")
 async def list_projects():
     """Discover all Beads projects on this machine."""
+    cached = _cache_get("projects")
+    if cached:
+        return cached
     try:
         projects = discover_projects()
-        return {
+        data = {
             "projects": [p.model_dump() for p in projects],
             "count": len(projects),
         }
+        _cache_set("projects", data)
+        return data
     except Exception as exc:
         _log.exception("Failed to discover projects")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -111,9 +141,15 @@ async def list_project_beads(project_name: str):
 @router.get("/api/projects/{project_name}/graph")
 async def project_graph(project_name: str):
     """Return bead DAG data for vis-network rendering."""
+    cache_key = f"graph:{project_name}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
     project = _find_project(project_name)
     beads = read_project_beads(project.path)
-    return build_graph_raw(beads, project_name=project_name)
+    data = build_graph_raw(beads, project_name=project_name)
+    _cache_set(cache_key, data)
+    return data
 
 
 # ── dispatch ──────────────────────────────────────────────────────────
@@ -163,9 +199,12 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
                 "output": str(exc),
             })
 
+    dispatched = sum(1 for r in results if r["success"])
+    if dispatched > 0:
+        _cache_bust("graph:")  # bust all graph caches on state change
     return {
         "project": project_name,
-        "dispatched": sum(1 for r in results if r["success"]),
+        "dispatched": dispatched,
         "failed": sum(1 for r in results if not r["success"]),
         "results": results,
     }
@@ -192,6 +231,7 @@ async def resolve_gate(project_name: str, bead_id: str, body: GateResolveRequest
 
     try:
         _bd("close", bead_id, "-m", body.comment or "Resolved via dashboard", cwd=project.path)
+        _cache_bust("graph:")  # bust graph caches on state change
         return {
             "bead_id": bead_id,
             "action": "closed",

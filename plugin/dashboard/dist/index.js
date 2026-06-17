@@ -25,8 +25,71 @@
   const STATUS_LABELS = { open: "Ready", in_progress: "In Progress", blocked: "Blocked", closed: "Closed", deferred: "Deferred" };
 
   // ── API helpers (uses SDK.fetchJSON for auth) ────────────────────
-  function apiGet(path) { return fetchJSON(API_BASE + path); }
+  var _apiCache = {};
+  function apiGet(path, opts) {
+    var skipCache = opts && opts.skipCache;
+    var now = Date.now();
+    var entry = _apiCache[path];
+    if (!skipCache && entry && (now - entry.ts) < 10000) return Promise.resolve(entry.data);
+    return fetchJSON(API_BASE + path).then(function(d) { _apiCache[path] = { data: d, ts: now }; return d; });
+  }
+  function invalidateCache(path) {
+    if (path) { delete _apiCache[path]; }
+    else { for (var k in _apiCache) { if (_apiCache.hasOwnProperty(k)) delete _apiCache[k]; } }
+  }
   function apiPost(path, body) { return fetchJSON(API_BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+
+  // ── Detail panel ─────────────────────────────────────────────────
+  function DetailPanel({ nodeId, nodes, project, onClose, onDispatch, onGate }) {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return null;
+    const s = node.status || "open";
+    const color = STATUS_COLORS[s] || "#666";
+
+    return h(Card, { className: "hb-detail-card", style: { margin: "12px" } },
+      h(CardContent, null,
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 8 } },
+          h("h3", { style: { margin: 0, fontSize: 15, color: "var(--hb-text-bright, #fff)" } }, node.id),
+          h(Button, { size: "sm", variant: "ghost", onClick: onClose, style: { color: "var(--hb-muted, #888)" } }, "✕")
+        ),
+        h("p", { style: { color: "var(--hb-text-muted, #aaa)", fontSize: 13, margin: "0 0 10px" } }, node.title || ""),
+        h("div", { style: { display: "flex", gap: 6, marginBottom: 10 } },
+          h(Badge, { style: { background: color + "22", color, border: "1px solid " + color } }, STATUS_LABELS[s] || s),
+          h(Badge, { style: { background: "var(--hb-card, #333)", color: "var(--hb-text, #ccc)" } }, node.priority || "?")
+        ),
+        h("div", { style: { display: "flex", gap: 8 } },
+          h(Button, { size: "sm", style: { background: "var(--hb-success, #00cc66)", color: "var(--hb-text-on-accent, #000)", fontWeight: 600 }, onClick: () => onDispatch(nodeId) }, "🚀 Dispatch"),
+          h(Button, { size: "sm", variant: "outline", onClick: () => onGate(nodeId) }, "🔓 Resolve")
+        )
+      )
+    );
+  }
+
+  // ── Toast ────────────────────────────────────────────────────────
+  function useToast() {
+    const [toast, setToast] = useState(null);
+    const show = useCallback((msg, type) => {
+      setToast({ msg, type, ts: Date.now() });
+      setTimeout(() => setToast(null), 3500);
+    }, []);
+    return { toast, show };
+  }
+
+  // ── Status filter bar ────────────────────────────────────────────
+  function StatusFilterBar({ filters, toggleFilter }) {
+    return h("div", { style: { padding: "4px 14px", borderBottom: "1px solid var(--hb-border, #222)", display: "flex", gap: 6, flexWrap: "wrap" } },
+      ...STATUSES.map(s => {
+        const on = filters.has(s);
+        return h(Button, {
+          key: s,
+          size: "sm",
+          variant: on ? "default" : "ghost",
+          style: { fontSize: 11, opacity: on ? 1 : 0.4, borderColor: STATUS_COLORS[s], color: STATUS_COLORS[s] },
+          onClick: () => toggleFilter(s),
+        }, STATUS_LABELS[s] || s);
+      })
+    );
+  }
 
   // ── Graph renderer (imperative, called from useEffect) ────────────
   function renderVisNetwork(container, nodes, edges, onNodeClick) {
@@ -55,12 +118,18 @@
     const dsNodes = new vis.DataSet(styled);
     const dsEdges = new vis.DataSet(styledEdges);
 
-    const net = new vis.Network(container, { nodes: dsNodes, edges: dsEdges }, {
-      layout: {
-        hierarchical: { enabled: true, direction: "LR", sortMethod: "directed", nodeSpacing: 120, levelSeparation: 200 },
-      },
+    var hasEdges = styledEdges.length > 0;
+    var layoutOpts = hasEdges
+      ? { hierarchical: { enabled: true, direction: "LR", sortMethod: "directed", nodeSpacing: 120, levelSeparation: 200 } }
+      : { randomSeed: 42 };
+    var physicsOpts = hasEdges
+      ? { enabled: true, hierarchicalRepulsion: { nodeDistance: 150 }, solver: "hierarchicalRepulsion" }
+      : { enabled: true, solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.01, springLength: 200, springConstant: 0.08 } };
+
+    var net = new vis.Network(container, { nodes: dsNodes, edges: dsEdges }, {
+      layout: layoutOpts,
       edges: { arrows: { to: { enabled: true, scaleFactor: 0.6 } }, color: { color: "#444466", highlight: "#8888aa" }, smooth: { type: "curvedCW", roundness: 0.2 }, width: 1 },
-      physics: { enabled: true, hierarchicalRepulsion: { nodeDistance: 150 }, solver: "hierarchicalRepulsion" },
+      physics: physicsOpts,
       interaction: { hover: true, tooltipDelay: 200, navigationButtons: true, keyboard: true },
     });
 
@@ -68,42 +137,6 @@
     net.on("doubleClick", p => { if (p.nodes.length) net.focus(p.nodes[0], { scale: 1.5, animation: true }); });
 
     return net;
-  }
-
-  // ── Detail panel ─────────────────────────────────────────────────
-  function DetailPanel({ nodeId, nodes, project, onClose, onDispatch, onGate }) {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return null;
-    const s = node.status || "open";
-    const color = STATUS_COLORS[s] || "#666";
-
-    return h(Card, { className: "hb-detail-card", style: { margin: "12px" } },
-      h(CardContent, null,
-        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 8 } },
-          h("h3", { style: { margin: 0, fontSize: 15, color: "#fff" } }, node.id),
-          h(Button, { size: "sm", variant: "ghost", onClick: onClose, style: { color: "#888" } }, "✕")
-        ),
-        h("p", { style: { color: "#aaa", fontSize: 13, margin: "0 0 10px" } }, node.title || ""),
-        h("div", { style: { display: "flex", gap: 6, marginBottom: 10 } },
-          h(Badge, { style: { background: color + "22", color, border: "1px solid " + color } }, STATUS_LABELS[s] || s),
-          h(Badge, { style: { background: "#333", color: "#ccc" } }, node.priority || "?")
-        ),
-        h("div", { style: { display: "flex", gap: 8 } },
-          h(Button, { size: "sm", style: { background: "#00cc66", color: "#000", fontWeight: 600 }, onClick: () => onDispatch(nodeId) }, "🚀 Dispatch"),
-          h(Button, { size: "sm", variant: "outline", onClick: () => onGate(nodeId) }, "🔓 Resolve")
-        )
-      )
-    );
-  }
-
-  // ── Toast ────────────────────────────────────────────────────────
-  function useToast() {
-    const [toast, setToast] = useState(null);
-    const show = useCallback((msg, type) => {
-      setToast({ msg, type, ts: Date.now() });
-      setTimeout(() => setToast(null), 3500);
-    }, []);
-    return { toast, show };
   }
 
   // ── Main BeadsPage ───────────────────────────────────────────────
@@ -123,13 +156,20 @@
     const networkRef = useRef(null);
     const { toast, show } = useToast();
 
-    // Load vis-network CDN
+    // Load vis-network (local bundle with CDN fallback)
     useEffect(() => {
       if (window.vis) { setVisLoaded(true); return; }
+      const assetUrl = "/api/plugins/hermes-beads/dist/vis-network.min.js";
       const s = document.createElement("script");
-      s.src = "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js";
+      s.src = assetUrl;
       s.onload = () => setVisLoaded(true);
-      s.onerror = () => { s.src = s.src; document.head.appendChild(s); };
+      s.onerror = () => {
+        // Fallback to CDN if local bundle unavailable
+        const cdn = document.createElement("script");
+        cdn.src = "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js";
+        cdn.onload = () => setVisLoaded(true);
+        document.head.appendChild(cdn);
+      };
       document.head.appendChild(s);
     }, []);
 
@@ -202,7 +242,8 @@
         const ok = r.results?.[0]?.success;
         show(ok ? "✅ Dispatched " + beadId : "❌ " + (r.results?.[0]?.output || "Failed"), ok ? "success" : "error");
         if (ok) {
-          const d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
+          invalidateCache();
+          var d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
           setNodes(d.nodes || []); setEdges(d.edges || []);
         }
       } catch (e) { show("❌ " + e.message, "error"); }
@@ -213,7 +254,8 @@
       try {
         const r = await apiPost("/projects/" + encodeURIComponent(project) + "/gate/" + encodeURIComponent(beadId), { comment: "Resolved via dashboard" });
         show("✅ " + (r.message || "Resolved"), "success");
-        const d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
+        invalidateCache();
+        var d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
         setNodes(d.nodes || []); setEdges(d.edges || []);
       } catch (e) { show("❌ " + e.message, "error"); }
     };
@@ -224,53 +266,52 @@
       setFilters(next);
     };
 
-    return h("div", { style: { height: "100%", display: "flex", flexDirection: "column", background: "#0d0d1a", color: "#ccc", fontFamily: "system-ui, sans-serif" } },
+    return h("div", { style: { height: "100%", display: "flex", flexDirection: "column", background: "var(--hb-bg, #0d0d1a)", color: "var(--hb-text, #ccc)", fontFamily: "system-ui, sans-serif" } },
       // Header
-      h("div", { style: { padding: "8px 14px", borderBottom: "1px solid #222", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
-        h("strong", { style: { color: "#00ff88", fontSize: 17 } }, "🐝 Beads"),
+      h("div", { style: { padding: "8px 14px", borderBottom: "1px solid var(--hb-border, #222)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+        h("strong", { style: { color: "var(--hb-accent, #00ff88)", fontSize: 17 } }, "🐝 Beads"),
         projects.length > 0 && h(Select, { value: project, onValueChange: setProject, style: { maxWidth: 200 } },
           h(SelectOption, { value: "" }, "— select —"),
           ...projects.map(p => h(SelectOption, { key: p.name, value: p.name }, p.name + " (" + p.bead_count + ")"))
         ),
-        h(Input, { placeholder: "Search beads…", value: search, onChange: e => setSearch(e.target.value), style: { width: 160, background: "#1a1a2e", color: "#fff", border: "1px solid #333" } }),
-        h("span", { style: { color: "#666", fontSize: 12 } }, nodes.length + " beads"),
+        h(Input, { placeholder: "Search beads…", value: search, onChange: e => setSearch(e.target.value), style: { width: 160, background: "var(--hb-card, #1a1a2e)", color: "var(--hb-text-bright, #fff)", border: "1px solid var(--hb-border-strong, #333)" } }),
+        h("span", { style: { color: "var(--hb-muted, #666)", fontSize: 12 } }, nodes.length + " beads"),
         h("span", { style: { flex: 1 } }),
         h(Button, { size: "sm", variant: "outline", onClick: () => { if (project) { setLoading(true); apiGet("/projects/" + encodeURIComponent(project) + "/graph").then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); setLastError(null); }).catch(e => show("❌ " + (e.message || "Refresh failed"), "error")).finally(() => setLoading(false)); } } }, "🔄 Refresh"),
       ),
-      // Filters
-      h("div", { style: { padding: "4px 14px", borderBottom: "1px solid #222", display: "flex", gap: 6, flexWrap: "wrap" } },
-        ...STATUSES.map(s => {
-          const on = filters.has(s);
-          return h(Button, {
-            key: s,
-            size: "sm",
-            variant: on ? "default" : "ghost",
-            style: { fontSize: 11, opacity: on ? 1 : 0.4, borderColor: STATUS_COLORS[s], color: STATUS_COLORS[s] },
-            onClick: () => toggleFilter(s),
-          }, STATUS_LABELS[s] || s);
-        })
+      // Empty state when no projects discovered
+      !projects.length && !loading && h(Card, { style: { margin: "16px" } },
+        h(CardContent, null,
+          h("div", { style: { textAlign: "center", padding: "24px" } },
+            h("p", { style: { fontSize: 18, marginBottom: 8 } }, "📭 No Beads projects found"),
+            h("p", { style: { color: "var(--hb-muted, #888)", fontSize: 13 } }, "Run ", h("code", { style: { background: "var(--hb-card, #1a1a2e)", padding: "2px 6px", borderRadius: 3 } }, "bd init"), " in a project directory to start tracking beads."),
+            h("p", { style: { color: "var(--hb-muted, #888)", fontSize: 13 } }, "Or add a scan root in your Hermes config to auto-discover projects.")
+          )
+        )
       ),
+      // Filters
+      projects.length > 0 && h(StatusFilterBar, { filters, toggleFilter }),
       // Graph + detail
       h("div", { style: { flex: 1, display: "flex", overflow: "hidden" } },
         h("div", {
           ref: graphRef,
-          style: { flex: 1, minWidth: 0, background: "#0d0d1a" },
-        }, loading && h("div", { style: { color: "#888", padding: "3rem", textAlign: "center" } }, "⏳ Loading beads…"),
-           error && h("div", { style: { color: "#ff4477", padding: "2rem", textAlign: "center" } }, "❌ " + error)),
-        selectedNode && h("div", { style: { width: 300, background: "#111122", borderLeft: "1px solid #222", overflowY: "auto", flexShrink: 0 } },
+          style: { flex: 1, minWidth: 0, background: "var(--hb-bg, #0d0d1a)" },
+        }, loading && h("div", { style: { color: "var(--hb-muted, #888)", padding: "3rem", textAlign: "center" } }, "⏳ Loading beads…"),
+           error && h("div", { style: { color: "var(--hb-error, #ff4477)", padding: "2rem", textAlign: "center" } }, "❌ " + error)),
+        selectedNode && h("div", { style: { width: 300, background: "var(--hb-card-alt, #111122)", borderLeft: "1px solid var(--hb-border, #222)", overflowY: "auto", flexShrink: 0 } },
           h(DetailPanel, { nodeId: selectedNode, nodes, project, onClose: () => setSelectedNode(null), onDispatch: handleDispatch, onGate: handleGate })
         )
       ),
       // Footer
-      h("div", { style: { padding: "3px 14px", borderTop: "1px solid #222", fontSize: 11, color: "#555", display: "flex", gap: 16 } },
+      h("div", { style: { padding: "3px 14px", borderTop: "1px solid var(--hb-border, #222)", fontSize: 11, color: "var(--hb-muted-dark, #555)", display: "flex", gap: 16 } },
         h("span", null, "Click: detail"), h("span", null, "Dbl-click: zoom"), h("span", null, "Esc: close panel"), h("span", null, "30s auto-refresh"),
-        lastError && h("span", { style: { color: "#ff6644", marginLeft: "auto" } }, "⚠ " + lastError)
+        lastError && h("span", { style: { color: "var(--hb-warn, #ff6644)", marginLeft: "auto" } }, "⚠ " + lastError)
       ),
       // Toast
       toast && h("div", {
         style: { position: "fixed", bottom: 20, right: 20, padding: "10px 20px", borderRadius: 6, zIndex: 9999,
-          background: toast.type === "error" ? "#ff4477" : toast.type === "success" ? "#00cc66" : "#333",
-          color: "#fff", fontSize: 13 }
+          background: toast.type === "error" ? "var(--hb-error, #ff4477)" : toast.type === "success" ? "var(--hb-success, #00cc66)" : "var(--hb-toast-bg, #333)",
+          color: "var(--hb-toast-text, #fff)", fontSize: 13 }
       }, toast.msg)
     );
   }
