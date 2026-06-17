@@ -14,6 +14,9 @@ from typing import Optional
 from hermes_beads.bead_model import Bead, BeadDependency, BeadProject, BeadStatus, BeadPriority
 
 # Known project locations to scan. Ordered: more specific first.
+# Entries that contain a .beads/ directory themselves are treated as
+# direct projects; entries that are parent directories are scanned
+# for child projects (iterdir).
 _SCAN_ROOTS = [
     Path.home() / "workspace",
     Path.home() / "leakwatch",
@@ -150,8 +153,33 @@ def read_project_beads(project_path: str | Path) -> list[Bead]:
     return beads
 
 
+def _register_project(
+    projects: dict[str, BeadProject],
+    entry: Path,
+) -> None:
+    """Register a single project directory in the projects map."""
+    name = entry.name
+    if name in projects:
+        return
+    beads = read_project_beads(entry)
+    status_counts: dict[str, int] = {}
+    for b in beads:
+        s = b.status.value
+        status_counts[s] = status_counts.get(s, 0) + 1
+    projects[name] = BeadProject(
+        name=name,
+        path=str(entry.resolve()),
+        bead_count=len(beads),
+        status_counts=status_counts,
+    )
+
+
 def discover_projects() -> list[BeadProject]:
     """Scan known locations for Beads projects (.beads/issues.jsonl files).
+
+    Two scanning strategies:
+    1. Direct: if a scan root itself contains .beads/, register it.
+    2. Iterdir: scan subdirectories of each root for .beads/.
 
     Returns:
         List of BeadProject objects with name, path, and bead counts.
@@ -163,28 +191,20 @@ def discover_projects() -> list[BeadProject]:
     all_roots.extend([p for p in _SCAN_ROOTS if p.is_dir()])
 
     for root in all_roots:
-        for entry in root.iterdir():
-            if not entry.is_dir():
-                continue
-            jsonl = entry / ".beads" / "issues.jsonl"
-            if not jsonl.is_file():
-                continue
+        # Strategy 1: check if the root itself is a bead project
+        if (root / ".beads" / "issues.jsonl").is_file():
+            _register_project(projects, root)
 
-            name = entry.name
-            if name in projects:
-                continue
-
-            beads = read_project_beads(entry)
-            status_counts: dict[str, int] = {}
-            for b in beads:
-                s = b.status.value
-                status_counts[s] = status_counts.get(s, 0) + 1
-
-            projects[name] = BeadProject(
-                name=name,
-                path=str(entry.resolve()),
-                bead_count=len(beads),
-                status_counts=status_counts,
-            )
+        # Strategy 2: scan subdirectories
+        try:
+            for entry in root.iterdir():
+                if not entry.is_dir():
+                    continue
+                jsonl = entry / ".beads" / "issues.jsonl"
+                if not jsonl.is_file():
+                    continue
+                _register_project(projects, entry)
+        except PermissionError:
+            pass
 
     return list(projects.values())
