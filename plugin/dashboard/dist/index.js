@@ -2,315 +2,282 @@
  * hermes-beads Dashboard Plugin — interactive bead DAG viewer
  * v2.0.0-alpha.1
  *
- * vis-network DAG with neon glow, detail panel, dispatch, filters, search.
+ * Uses Hermes Plugin SDK (React + shadcn). Renders a vis-network DAG
+ * with neon glow styling, status filters, search, dispatch, and gate resolve.
  */
 (function () {
-  'use strict';
+  "use strict";
 
-  const PLUGIN_NAME = 'hermes-beads';
-  const API_BASE = '/api/plugins/hermes-beads/api';
+  const SDK = window.__HERMES_PLUGIN_SDK__;
+  if (!SDK || !window.__HERMES_PLUGINS__) return;
+
+  const React = SDK.React;
+  const h = React.createElement;
+  const { useState, useEffect, useRef, useCallback } = SDK.hooks;
+  const { Card, CardContent, Button, Badge, Input, Select, SelectOption } = SDK.components;
+  const cn = SDK.utils.cn || function () { return Array.from(arguments).filter(Boolean).join(" "); };
+
+  const API_BASE = "/api/plugins/hermes-beads/api";
   const REFRESH_MS = 30000;
-  const VIS_CDN = 'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js';
-  const STATUSES = ['open', 'in_progress', 'blocked', 'closed', 'deferred'];
+  const STATUSES = ["open", "in_progress", "blocked", "closed", "deferred"];
+  const STATUS_COLORS = { open: "#00ff88", in_progress: "#ffaa00", blocked: "#ff4477", closed: "#666", deferred: "#888" };
+  const STATUS_LABELS = { open: "Ready", in_progress: "In Progress", blocked: "Blocked", closed: "Closed", deferred: "Deferred" };
 
-  let currentProject = null;
-  let network = null;
-  let refreshTimer = null;
-  let allProjects = [];
-  let currentBeads = [];
-  let currentEdges = [];
-  let activeFilters = new Set(STATUSES);
-  let searchQuery = '';
-
-  // ── DOM helpers ─────────────────────────────────────────────────────
-  function el(t, a, ...c) {
-    const e = document.createElement(t);
-    if (a) Object.assign(e, a);
-    c.forEach(x => { if (x != null) e.append(typeof x === 'string' ? document.createTextNode(x) : x); });
-    return e;
-  }
-  function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-
-  // ── API ─────────────────────────────────────────────────────────────
-  async function api(method, path, body) {
-    const opts = { method, headers: { 'Content-Type': 'application/json' } };
-    if (body) opts.body = JSON.stringify(body);
-    const resp = await fetch(API_BASE + path, opts);
-    if (!resp.ok) throw new Error(`${resp.status}`);
+  // ── API helpers ───────────────────────────────────────────────────
+  async function apiGet(path) {
+    const resp = await fetch(API_BASE + path);
+    if (!resp.ok) throw new Error(resp.status + "");
     return resp.json();
   }
-  const apiGet = path => api('GET', path);
-  const apiPost = (path, body) => api('POST', path, body);
-
-  // ── toast ───────────────────────────────────────────────────────────
-  function toast(msg, type) {
-    const t = el('div', {
-      style: `position:fixed;bottom:20px;right:20px;padding:10px 20px;border-radius:6px;z-index:9999;
-        background:${type==='error'?'#ff4477':type==='success'?'#00cc66':'#333'};color:#fff;font-size:13px;`
-    }, msg);
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3500);
+  async function apiPost(path, body) {
+    const resp = await fetch(API_BASE + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(resp.status + "");
+    return resp.json();
   }
 
-  // ── project selector ────────────────────────────────────────────────
-  function buildSelector(projects) {
-    const sel = el('select', {
-      id: 'hb-select',
-      style: 'padding:5px 10px;border-radius:6px;border:1px solid #333;background:#1a1a2e;color:#fff;font-size:13px;'
-    });
-    sel.appendChild(el('option', { value: '' }, '— select —'));
-    projects.forEach(p => sel.appendChild(el('option', { value: p.name }, `${p.name} (${p.bead_count})`)));
-    sel.addEventListener('change', () => { currentProject = sel.value; if (currentProject) loadGraph(); });
-    return sel;
-  }
+  // ── Graph renderer (imperative, called from useEffect) ────────────
+  function renderVisNetwork(container, nodes, edges, onNodeClick) {
+    if (!container) return null;
+    container.innerHTML = "";
 
-  // ── status filter pills ─────────────────────────────────────────────
-  function buildFilters() {
-    const bar = el('div', { id: 'hb-filters', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;' });
-    const colors = { open: '#00ff88', in_progress: '#ffaa00', blocked: '#ff4477', closed: '#666', deferred: '#888' };
-    STATUSES.forEach(s => {
-      const btn = el('button', {
-        id: `hb-filter-${s}`,
-        style: `padding:3px 10px;border-radius:12px;border:1px solid ${colors[s]};background:${colors[s]}22;color:${colors[s]};font-size:11px;cursor:pointer;`,
-        textContent: s.replace('_', ' '),
-      });
-      btn.addEventListener('click', () => {
-        if (activeFilters.has(s)) { activeFilters.delete(s); btn.style.opacity = '0.4'; }
-        else { activeFilters.add(s); btn.style.opacity = '1'; }
-        applyFilters();
-      });
-      bar.appendChild(btn);
-    });
-    return bar;
-  }
-
-  // ── search ──────────────────────────────────────────────────────────
-  function buildSearch() {
-    const inp = el('input', {
-      type: 'text', id: 'hb-search', placeholder: 'Search beads…',
-      style: 'padding:5px 10px;border-radius:6px;border:1px solid #333;background:#1a1a2e;color:#fff;font-size:13px;width:160px;'
-    });
-    inp.addEventListener('input', () => { searchQuery = inp.value.toLowerCase(); applyFilters(); });
-    return inp;
-  }
-
-  // ── apply filters ───────────────────────────────────────────────────
-  function applyFilters() {
-    if (!network) return;
-    const visible = new Set();
-    currentBeads.forEach(n => {
-      const ok = activeFilters.has(n.group || n.status) &&
-        (!searchQuery || (n.id + ' ' + (n.title || '')).toLowerCase().includes(searchQuery));
-      if (ok) visible.add(n.id);
-    });
-    // Show nodes in filter, hide others
-    currentBeads.forEach(n => {
-      network.body.data.nodes.update({ id: n.id, hidden: !visible.has(n.id) });
-    });
-    // Show edges only if both endpoints visible
-    currentEdges.forEach(e => {
-      network.body.data.edges.update({ id: e.id, hidden: !(visible.has(e.from) && visible.has(e.to)) });
-    });
-    document.getElementById('hb-bead-count').textContent = `${visible.size} / ${currentBeads.length}`;
-  }
-
-  // ── detail panel ────────────────────────────────────────────────────
-  function showDetail(nodeId) {
-    const node = currentBeads.find(n => n.id === nodeId);
-    if (!node) return;
-    const panel = document.getElementById('hb-detail');
-    if (!panel) return;
-
-    const statusColor = { open: '#00ff88', in_progress: '#ffaa00', blocked: '#ff4477', closed: '#666', deferred: '#888' };
-    const s = node.status || 'open';
-
-    panel.innerHTML = [
-      `<div style="padding:14px;">`,
-      `  <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:10px;">`,
-      `    <h3 style="margin:0;color:#fff;font-size:15px;">${esc(node.id)}</h3>`,
-      `    <button id="hb-detail-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:18px;">✕</button>`,
-      `  </div>`,
-      `  <p style="color:#aaa;margin:0 0 10px;font-size:13px;">${esc(node.title || '')}</p>`,
-      `  <div style="display:flex;gap:6px;margin-bottom:10px;">`,
-      `    <span style="padding:2px 8px;border-radius:4px;background:${statusColor[s]}22;color:${statusColor[s]};font-size:11px;border:1px solid ${statusColor[s]};">${(s||'').replace('_',' ')}</span>`,
-      `    <span style="padding:2px 8px;border-radius:4px;background:#333;color:#ccc;font-size:11px;">${esc(node.priority||'?')}</span>`,
-      `  </div>`,
-      `  <div style="display:flex;gap:8px;flex-wrap:wrap;">`,
-      `    <button id="hb-dispatch-btn" style="padding:6px 14px;background:#00cc66;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px;">🚀 Dispatch</button>`,
-      `    <button id="hb-gate-btn" style="padding:6px 14px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer;font-size:12px;">🔓 Resolve gate</button>`,
-      `  </div>`,
-      `  <div id="hb-detail-status" style="margin-top:10px;font-size:12px;color:#888;"></div>`,
-      `</div>`,
-    ].join('\n');
-
-    document.getElementById('hb-detail-close').addEventListener('click', () => panel.innerHTML = '');
-    document.getElementById('hb-dispatch-btn').addEventListener('click', () => dispatchBead(node.id));
-    document.getElementById('hb-gate-btn').addEventListener('click', () => resolveGate(node.id));
-  }
-
-  async function dispatchBead(beadId) {
-    if (!currentProject) return;
-    const status = document.getElementById('hb-detail-status');
-    if (status) status.innerHTML = '<span style="color:#ffaa00;">⏳ Dispatching…</span>';
-    try {
-      const result = await apiPost(`/projects/${encodeURIComponent(currentProject)}/dispatch`, { bead_ids: [beadId] });
-      const r = result.results?.[0];
-      if (r?.success) {
-        if (status) status.innerHTML = '<span style="color:#00cc66;">✅ Dispatched</span>';
-        toast(`Dispatched ${beadId}`, 'success');
-        setTimeout(loadGraph, 1000);
-      } else {
-        if (status) status.innerHTML = `<span style="color:#ff4477;">❌ ${esc(r?.output || 'Failed')}</span>`;
-        toast(`Dispatch failed: ${r?.output || 'Unknown error'}`, 'error');
-      }
-    } catch (e) {
-      if (status) status.innerHTML = `<span style="color:#ff4477;">❌ ${esc(e.message)}</span>`;
-      toast(`Error: ${e.message}`, 'error');
+    if (!window.vis) {
+      container.innerHTML = '<div style="color:#888;padding:2rem;text-align:center;">Loading vis-network…</div>';
+      return null;
     }
-  }
-
-  async function resolveGate(beadId) {
-    if (!currentProject) return;
-    const status = document.getElementById('hb-detail-status');
-    if (status) status.innerHTML = '<span style="color:#ffaa00;">⏳ Resolving…</span>';
-    try {
-      const result = await apiPost(`/projects/${encodeURIComponent(currentProject)}/gate/${encodeURIComponent(beadId)}`, { comment: 'Resolved via dashboard' });
-      if (status) status.innerHTML = `<span style="color:#00cc66;">✅ ${esc(result.message || 'Resolved')}</span>`;
-      toast(result.message, 'success');
-      setTimeout(loadGraph, 1000);
-    } catch (e) {
-      if (status) status.innerHTML = `<span style="color:#ff4477;">❌ ${esc(e.message)}</span>`;
-      toast(`Error: ${e.message}`, 'error');
-    }
-  }
-
-  // ── graph rendering ─────────────────────────────────────────────────
-  function renderGraph(nodes, edges, container) {
-    container.innerHTML = '';
     if (!nodes.length) {
       container.innerHTML = '<div style="color:#666;padding:3rem;text-align:center;"><p style="font-size:18px;">📭 No beads found</p><p style="font-size:13px;">Run <code>bd init</code> in a project to start tracking.</p></div>';
-      return;
+      return null;
     }
 
-    const styled = nodes.map((n, i) => ({
+    const styled = nodes.map(n => ({
       ...n,
-      id: n.id,
-      color: n.color || { background: '#666', border: '#444' },
-      font: n.font || { size: 11, color: '#ccc', face: 'monospace' },
+      color: n.color || { background: "#666", border: "#444", highlight: { background: "#888", border: "#666" } },
+      font: n.font || { size: 11, color: "#ccc", face: "monospace" },
       borderWidth: n.borderWidth ?? 2,
       shadow: n.shadow || { enabled: true, size: 10 },
-      shape: n.shape || 'dot',
+      shape: n.shape || "dot",
       size: n.size || 18,
     }));
-    const styledEdges = edges.map((e, i) => ({ ...e, id: e.id || `e${i}` }));
-
-    currentBeads = styled;
-    currentEdges = styledEdges;
-
+    const styledEdges = edges.map((e, i) => ({ ...e, id: e.id || "e" + i }));
     const dsNodes = new vis.DataSet(styled);
     const dsEdges = new vis.DataSet(styledEdges);
 
-    network = new vis.Network(container, { nodes: dsNodes, edges: dsEdges }, {
+    const net = new vis.Network(container, { nodes: dsNodes, edges: dsEdges }, {
       layout: {
-        hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed', nodeSpacing: 120, levelSeparation: 200 },
+        hierarchical: { enabled: true, direction: "LR", sortMethod: "directed", nodeSpacing: 120, levelSeparation: 200 },
       },
-      edges: { arrows: { to: { enabled: true, scaleFactor: 0.6 } }, color: { color: '#444466', highlight: '#8888aa' }, smooth: { type: 'curvedCW', roundness: 0.2 }, width: 1 },
-      physics: { enabled: true, hierarchicalRepulsion: { nodeDistance: 150 }, solver: 'hierarchicalRepulsion' },
+      edges: { arrows: { to: { enabled: true, scaleFactor: 0.6 } }, color: { color: "#444466", highlight: "#8888aa" }, smooth: { type: "curvedCW", roundness: 0.2 }, width: 1 },
+      physics: { enabled: true, hierarchicalRepulsion: { nodeDistance: 150 }, solver: "hierarchicalRepulsion" },
       interaction: { hover: true, tooltipDelay: 200, navigationButtons: true, keyboard: true },
     });
 
-    network.on('click', p => { if (p.nodes.length) showDetail(p.nodes[0]); });
-    network.on('doubleClick', p => { if (p.nodes.length) network.focus(p.nodes[0], { scale: 1.5, animation: true }); });
-    applyFilters();
+    net.on("click", p => { if (p.nodes.length && onNodeClick) onNodeClick(p.nodes[0]); });
+    net.on("doubleClick", p => { if (p.nodes.length) net.focus(p.nodes[0], { scale: 1.5, animation: true }); });
+
+    return net;
   }
 
-  // ── data loading ────────────────────────────────────────────────────
-  async function loadProjects() {
-    try { const d = await apiGet('/projects'); allProjects = d.projects || []; return allProjects; }
-    catch (e) { console.error('[hb] projects:', e); return []; }
+  // ── Detail panel ─────────────────────────────────────────────────
+  function DetailPanel({ nodeId, nodes, project, onClose, onDispatch, onGate }) {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return null;
+    const s = node.status || "open";
+    const color = STATUS_COLORS[s] || "#666";
+
+    return h(Card, { className: "hb-detail-card", style: { margin: "12px" } },
+      h(CardContent, null,
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 8 } },
+          h("h3", { style: { margin: 0, fontSize: 15, color: "#fff" } }, node.id),
+          h(Button, { size: "sm", variant: "ghost", onClick: onClose, style: { color: "#888" } }, "✕")
+        ),
+        h("p", { style: { color: "#aaa", fontSize: 13, margin: "0 0 10px" } }, node.title || ""),
+        h("div", { style: { display: "flex", gap: 6, marginBottom: 10 } },
+          h(Badge, { style: { background: color + "22", color, border: "1px solid " + color } }, STATUS_LABELS[s] || s),
+          h(Badge, { style: { background: "#333", color: "#ccc" } }, node.priority || "?")
+        ),
+        h("div", { style: { display: "flex", gap: 8 } },
+          h(Button, { size: "sm", style: { background: "#00cc66", color: "#000", fontWeight: 600 }, onClick: () => onDispatch(nodeId) }, "🚀 Dispatch"),
+          h(Button, { size: "sm", variant: "outline", onClick: () => onGate(nodeId) }, "🔓 Resolve")
+        )
+      )
+    );
   }
 
-  async function loadGraph() {
-    if (!currentProject) return;
-    const c = document.getElementById('hb-graph');
-    if (!c) return;
-    c.innerHTML = '<div style="color:#888;padding:3rem;text-align:center;">⏳ Loading beads…</div>';
-    try {
-      const d = await apiGet(`/projects/${encodeURIComponent(currentProject)}/graph`);
-      renderGraph(d.nodes || [], d.edges || [], c);
-    } catch (e) {
-      c.innerHTML = `<div style="color:#ff4477;padding:2rem;text-align:center;">❌ Failed to load: ${esc(e.message)}</div>`;
-    }
+  // ── Toast ────────────────────────────────────────────────────────
+  function useToast() {
+    const [toast, setToast] = useState(null);
+    const show = useCallback((msg, type) => {
+      setToast({ msg, type, ts: Date.now() });
+      setTimeout(() => setToast(null), 3500);
+    }, []);
+    return { toast, show };
   }
 
-  // ── refresh ─────────────────────────────────────────────────────────
-  function startRefresh() { stopRefresh(); refreshTimer = setInterval(() => { if (currentProject) loadGraph(); }, REFRESH_MS); }
-  function stopRefresh() { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } }
+  // ── Main BeadsPage ───────────────────────────────────────────────
+  function BeadsPage() {
+    const [projects, setProjects] = useState([]);
+    const [project, setProject] = useState("");
+    const [nodes, setNodes] = useState([]);
+    const [edges, setEdges] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [filters, setFilters] = useState(new Set(STATUSES));
+    const [search, setSearch] = useState("");
+    const [selectedNode, setSelectedNode] = useState(null);
+    const [visLoaded, setVisLoaded] = useState(false);
+    const graphRef = useRef(null);
+    const networkRef = useRef(null);
+    const { toast, show } = useToast();
 
-  // ── main init ───────────────────────────────────────────────────────
-  async function init(container) {
-    container.innerHTML = [
-      '<style>',
-      '  @keyframes hb-pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }',
-      '  @keyframes hb-slide { from{transform:translateX(100%)} to{transform:translateX(0)} }',
-      '  #hb-detail:not(:empty) { animation: hb-slide 0.2s ease-out; }',
-      '</style>',
-      '<div style="height:100%;display:flex;flex-direction:column;font-family:system-ui,sans-serif;background:#0d0d1a;color:#ccc;">',
-      '  <div style="padding:8px 14px;border-bottom:1px solid #222;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">',
-      '    <strong style="color:#00ff88;font-size:17px;">🐝 Beads</strong>',
-      '    <span id="hb-sel-wrap"></span>',
-      '    <span id="hb-search-wrap"></span>',
-      '    <span id="hb-bead-count" style="color:#666;font-size:12px;"></span>',
-      '    <span style="flex:1;"></span>',
-      '    <button id="hb-refresh-btn" style="padding:4px 10px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer;font-size:12px;">🔄 Refresh</button>',
-      '  </div>',
-      '  <div style="padding:4px 14px;border-bottom:1px solid #222;" id="hb-filters-wrap"></div>',
-      '  <div style="flex:1;display:flex;overflow:hidden;">',
-      '    <div id="hb-graph" style="flex:1;min-width:0;background:#0d0d1a;"></div>',
-      '    <div id="hb-detail" style="width:300px;background:#111122;border-left:1px solid #222;overflow-y:auto;flex-shrink:0;"></div>',
-      '  </div>',
-      '  <div style="padding:3px 14px;border-top:1px solid #222;font-size:11px;color:#555;display:flex;gap:16px;">',
-      '    <span>Esc: close panel</span><span>/: search</span><span>Click: detail</span><span>Dbl-click: zoom</span>',
-      '  </div>',
-      '</div>',
-    ].join('\n');
-
-    const projects = await loadProjects();
-    document.getElementById('hb-sel-wrap').appendChild(buildSelector(projects));
-    document.getElementById('hb-search-wrap').appendChild(buildSearch());
-    document.getElementById('hb-filters-wrap').appendChild(buildFilters());
-    document.getElementById('hb-refresh-btn').addEventListener('click', loadGraph);
-
-    if (projects.length) {
-      const hb = projects.find(p => p.name === 'hermes-beads');
-      const sel = document.getElementById('hb-select');
-      if (hb) { sel.value = 'hermes-beads'; currentProject = 'hermes-beads'; }
-      else { sel.value = projects[0].name; currentProject = projects[0].name; }
-      await loadGraph();
-    }
-    startRefresh();
-
-    // Keyboard shortcuts
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') document.getElementById('hb-detail').innerHTML = '';
-      if (e.key === '/' && document.activeElement !== document.getElementById('hb-search')) {
-        e.preventDefault();
-        document.getElementById('hb-search').focus();
-      }
-    });
-  }
-
-  // ── bootstrap ───────────────────────────────────────────────────────
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script'); s.src = src; s.onload = resolve; s.onerror = reject;
+    // Load vis-network CDN
+    useEffect(() => {
+      if (window.vis) { setVisLoaded(true); return; }
+      const s = document.createElement("script");
+      s.src = "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js";
+      s.onload = () => setVisLoaded(true);
+      s.onerror = () => { s.src = s.src; document.head.appendChild(s); };
       document.head.appendChild(s);
-    });
+    }, []);
+
+    // Load projects
+    useEffect(() => {
+      apiGet("/projects").then(d => {
+        setProjects(d.projects || []);
+        const hb = (d.projects || []).find(p => p.name === "hermes-beads");
+        if (hb) setProject("hermes-beads");
+        else if (d.projects?.length) setProject(d.projects[0].name);
+      }).catch(() => {});
+    }, []);
+
+    // Load graph when project changes
+    useEffect(() => {
+      if (!project || !visLoaded) return;
+      setLoading(true);
+      setError(null);
+      apiGet("/projects/" + encodeURIComponent(project) + "/graph")
+        .then(d => {
+          setNodes(d.nodes || []);
+          setEdges(d.edges || []);
+          setSelectedNode(null);
+        })
+        .catch(e => setError("Failed to load: " + (e.message || "unknown")))
+        .finally(() => setLoading(false));
+    }, [project, visLoaded]);
+
+    // Render vis-network into container
+    useEffect(() => {
+      if (!visLoaded || !graphRef.current) return;
+      const filteredNodes = nodes.filter(n => filters.has(n.group || n.status));
+      const visibleIds = new Set(filteredNodes.map(n => n.id));
+      const filteredEdges = edges.filter(e => visibleIds.has(e.from) && visibleIds.has(e.to));
+      // Apply search
+      const q = search.toLowerCase().trim();
+      const finalNodes = q
+        ? filteredNodes.filter(n => (n.id + " " + (n.title || "")).toLowerCase().includes(q))
+        : filteredNodes;
+      const finalIds = new Set(finalNodes.map(n => n.id));
+      const finalEdges = filteredEdges.filter(e => finalIds.has(e.from) && finalIds.has(e.to));
+
+      if (networkRef.current) networkRef.current.destroy();
+      networkRef.current = renderVisNetwork(graphRef.current, finalNodes, finalEdges, setSelectedNode);
+    }, [nodes, edges, filters, search, visLoaded]);
+
+    // Auto-refresh
+    useEffect(() => {
+      if (!project) return;
+      const timer = setInterval(() => {
+        apiGet("/projects/" + encodeURIComponent(project) + "/graph")
+          .then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); })
+          .catch(() => {});
+      }, REFRESH_MS);
+      return () => clearInterval(timer);
+    }, [project]);
+
+    const handleDispatch = async (beadId) => {
+      show("Dispatching " + beadId + "…", "info");
+      try {
+        const r = await apiPost("/projects/" + encodeURIComponent(project) + "/dispatch", { bead_ids: [beadId] });
+        const ok = r.results?.[0]?.success;
+        show(ok ? "✅ Dispatched " + beadId : "❌ " + (r.results?.[0]?.output || "Failed"), ok ? "success" : "error");
+        if (ok) {
+          const d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
+          setNodes(d.nodes || []); setEdges(d.edges || []);
+        }
+      } catch (e) { show("❌ " + e.message, "error"); }
+    };
+
+    const handleGate = async (beadId) => {
+      show("Resolving " + beadId + "…", "info");
+      try {
+        const r = await apiPost("/projects/" + encodeURIComponent(project) + "/gate/" + encodeURIComponent(beadId), { comment: "Resolved via dashboard" });
+        show("✅ " + (r.message || "Resolved"), "success");
+        const d = await apiGet("/projects/" + encodeURIComponent(project) + "/graph");
+        setNodes(d.nodes || []); setEdges(d.edges || []);
+      } catch (e) { show("❌ " + e.message, "error"); }
+    };
+
+    const toggleFilter = (s) => {
+      const next = new Set(filters);
+      next.has(s) ? next.delete(s) : next.add(s);
+      setFilters(next);
+    };
+
+    return h("div", { style: { height: "100%", display: "flex", flexDirection: "column", background: "#0d0d1a", color: "#ccc", fontFamily: "system-ui, sans-serif" } },
+      // Header
+      h("div", { style: { padding: "8px 14px", borderBottom: "1px solid #222", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+        h("strong", { style: { color: "#00ff88", fontSize: 17 } }, "🐝 Beads"),
+        projects.length > 0 && h(Select, { value: project, onValueChange: setProject, style: { maxWidth: 200 } },
+          h(SelectOption, { value: "" }, "— select —"),
+          ...projects.map(p => h(SelectOption, { key: p.name, value: p.name }, p.name + " (" + p.bead_count + ")"))
+        ),
+        h(Input, { placeholder: "Search beads…", value: search, onChange: e => setSearch(e.target.value), style: { width: 160, background: "#1a1a2e", color: "#fff", border: "1px solid #333" } }),
+        h("span", { style: { color: "#666", fontSize: 12 } }, nodes.length + " beads"),
+        h("span", { style: { flex: 1 } }),
+        h(Button, { size: "sm", variant: "outline", onClick: () => { if (project) { setLoading(true); apiGet("/projects/" + encodeURIComponent(project) + "/graph").then(d => { setNodes(d.nodes || []); setEdges(d.edges || []); }).catch(() => {}).finally(() => setLoading(false)); } } }, "🔄 Refresh"),
+      ),
+      // Filters
+      h("div", { style: { padding: "4px 14px", borderBottom: "1px solid #222", display: "flex", gap: 6, flexWrap: "wrap" } },
+        ...STATUSES.map(s => {
+          const on = filters.has(s);
+          return h(Button, {
+            key: s,
+            size: "sm",
+            variant: on ? "default" : "ghost",
+            style: { fontSize: 11, opacity: on ? 1 : 0.4, borderColor: STATUS_COLORS[s], color: STATUS_COLORS[s] },
+            onClick: () => toggleFilter(s),
+          }, STATUS_LABELS[s] || s);
+        })
+      ),
+      // Graph + detail
+      h("div", { style: { flex: 1, display: "flex", overflow: "hidden" } },
+        h("div", {
+          ref: graphRef,
+          style: { flex: 1, minWidth: 0, background: "#0d0d1a" },
+        }, loading && h("div", { style: { color: "#888", padding: "3rem", textAlign: "center" } }, "⏳ Loading beads…"),
+           error && h("div", { style: { color: "#ff4477", padding: "2rem", textAlign: "center" } }, "❌ " + error)),
+        selectedNode && h("div", { style: { width: 300, background: "#111122", borderLeft: "1px solid #222", overflowY: "auto", flexShrink: 0 } },
+          h(DetailPanel, { nodeId: selectedNode, nodes, project, onClose: () => setSelectedNode(null), onDispatch: handleDispatch, onGate: handleGate })
+        )
+      ),
+      // Footer
+      h("div", { style: { padding: "3px 14px", borderTop: "1px solid #222", fontSize: 11, color: "#555", display: "flex", gap: 16 } },
+        h("span", null, "Click: detail"), h("span", null, "Dbl-click: zoom"), h("span", null, "Esc: close panel"), h("span", null, "30s auto-refresh")
+      ),
+      // Toast
+      toast && h("div", {
+        style: { position: "fixed", bottom: 20, right: 20, padding: "10px 20px", borderRadius: 6, zIndex: 9999,
+          background: toast.type === "error" ? "#ff4477" : toast.type === "success" ? "#00cc66" : "#333",
+          color: "#fff", fontSize: 13 }
+      }, toast.msg)
+    );
   }
 
-  async function bootstrap() {
-    try { await loadScript(VIS_CDN); } catch (e) { console.warn('[hb] vis-network CDN retry…'); try { await loadScript(VIS_CDN); } catch (e2) { console.error('[hb] vis-network failed:', e2); } }
-    if (window.registerDashboardPlugin) window.registerDashboardPlugin(PLUGIN_NAME, { name: 'Beads', version: '2.0.0-alpha.1', render: init });
+  // ── Register ─────────────────────────────────────────────────────
+  if (window.__HERMES_PLUGINS__ && typeof window.__HERMES_PLUGINS__.register === "function") {
+    window.__HERMES_PLUGINS__.register("hermes-beads", BeadsPage);
   }
-  bootstrap();
 })();
