@@ -522,7 +522,8 @@ def bridge() -> None:
 @click.option("--apply", "apply_ops", is_flag=True, help="Apply planned tasks through a dispatch backend")
 @click.option("--backend", type=click.Choice(["local-file", "hermes-cli"]), default=None, help="Dispatch backend to use when applying")
 @click.option("--queue-file", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Queue file for the local-file backend")
-def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_file: Path | None) -> None:
+@click.option("--bead", "bead_id", default=None, help="Dispatch only this bead ID (default: dispatch all ready beads)")
+def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_file: Path | None, bead_id: str | None) -> None:
     """Map ready beads to Hermes Kanban task payloads.
 
     Planning logic lives in :mod:`hermes_beads.dispatch_ops`; this
@@ -537,6 +538,11 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
     if _json_env("HB_MOCK_BD_READY_JSON") is None:
         _check_bd_available()
     ready_beads = get_ready_beads()
+    if bead_id:
+        ready_beads = [b for b in ready_beads if b.get("id") == bead_id]
+        if not ready_beads:
+            click.echo(f"Error: bead '{bead_id}' not found in ready queue", err=True)
+            sys.exit(1)
     dispatch_beads = dispatch_candidates(ready_beads)
     plan = build_dispatch_plan(dispatch_beads, payload_builder=build_kanban_payload)
     if dry_run:
@@ -597,7 +603,7 @@ def bridge_dispatch(dry_run: bool, apply_ops: bool, backend: str | None, queue_f
 @click.option("--results-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--lock-file", type=click.Path(dir_okay=False, path_type=Path), default=Path(".hermes-beads/tick.lock"))
 @click.option("--stale-after", type=int, default=3600, help="Seconds after which a tick lock is stale")
-@click.option("--privacy-scan", is_flag=True, help="Run scripts/scan-privacy.sh before mutating")
+@click.option("--privacy-scan", is_flag=True, help="Run scripts/privacy-scan.sh before mutating")
 @click.option("--git-pull", is_flag=True, help="Run git pull --rebase before mutating")
 @click.option("--git-push", is_flag=True, help="Run git push after successful mutation")
 @click.option("--bd-pull", is_flag=True, help="Run bd dolt pull before mutating")
@@ -635,7 +641,7 @@ def bridge_tick(
     try:
         with TickLock(lock_file, stale_after_seconds=stale_after):
             if privacy_scan:
-                _run_command(["bash", "scripts/scan-privacy.sh"])
+                _run_command(["bash", "scripts/privacy-scan.sh"])
             if git_pull:
                 _run_command(["git", "pull", "--rebase"])
             if bd_pull:
