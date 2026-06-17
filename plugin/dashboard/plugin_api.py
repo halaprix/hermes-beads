@@ -4,33 +4,159 @@ hermes-beads dashboard plugin — backend API routes.
 Mounted automatically by the Hermes dashboard at /api/plugins/hermes-beads/.
 
 Endpoints:
-  GET  /hello              — health check
-  GET  /beads              — list all beads (via bd CLI)
-  GET  /beads/ready        — list ready (unblocked) beads
-  GET  /beads/<id>         — show single bead detail
-  GET  /beads/graph        — bead DAG data for vis-network rendering
+  GET  /hello                         — health check
+  GET  /api/projects                  — discover all Beads projects
+  GET  /api/projects/<name>/beads     — list beads for a project
+  GET  /api/projects/<name>/graph     — bead DAG data for vis-network
+  GET  /beads/<id>                    — single bead detail (via bd CLI)
 """
+from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
-import subprocess
 import json
-import os
+import logging
+import subprocess
 from pathlib import Path
 
+from fastapi import APIRouter, HTTPException
+
+from hermes_beads.bead_model import BeadNode, BeadEdge, BeadGraph, BeadStatus
+from hermes_beads.bead_reader import discover_projects, read_project_beads
+
+_log = logging.getLogger(__name__)
 router = APIRouter()
 
+# ── project discovery ──────────────────────────────────────────────────
 
-def _bd(*args: str, cwd: str | None = None) -> dict | list:
-    """Run a ``bd`` CLI command and return parsed JSON output."""
-    workdir = cwd or os.getcwd()
+
+@router.get("/api/projects")
+async def list_projects():
+    """Discover all Beads projects on this machine.
+
+    Returns a list of projects with their name, path, and bead counts.
+    """
+    try:
+        projects = discover_projects()
+        return {
+            "projects": [p.model_dump() for p in projects],
+            "count": len(projects),
+        }
+    except Exception as exc:
+        _log.exception("Failed to discover projects")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── beads for a project ────────────────────────────────────────────────
+
+
+@router.get("/api/projects/{project_name}/beads")
+async def list_project_beads(project_name: str):
+    """Return all beads in a specific project, parsed from JSONL.
+
+    Falls back gracefully if the project is not found.
+    """
+    projects = discover_projects()
+    project = next((p for p in projects if p.name == project_name), None)
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found. Available: "
+            f"{[p.name for p in projects]}",
+        )
+
+    beads = read_project_beads(project.path)
+    return {
+        "project": project_name,
+        "path": project.path,
+        "beads": [b.model_dump(exclude={"dependencies"}) for b in beads],
+        "count": len(beads),
+    }
+
+
+# ── graph data for vis-network ─────────────────────────────────────────
+
+_STATUS_COLORS = {
+    BeadStatus.OPEN: "#00ff88",
+    BeadStatus.IN_PROGRESS: "#ffaa00",
+    BeadStatus.BLOCKED: "#ff4477",
+    BeadStatus.CLOSED: "#666666",
+    BeadStatus.DEFERRED: "#888888",
+}
+
+
+@router.get("/api/projects/{project_name}/graph")
+async def project_graph(project_name: str):
+    """Return bead DAG data for vis-network rendering.
+
+    Builds nodes and edges from the project's beads, with colour
+    coding by status and edges representing dependency relationships.
+    """
+    projects = discover_projects()
+    project = next((p for p in projects if p.name == project_name), None)
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found",
+        )
+
+    beads = read_project_beads(project.path)
+    nodes = []
+    edges = []
+
+    for bead in beads:
+        color = _STATUS_COLORS.get(bead.status, "#aaaaaa")
+        nodes.append(BeadNode(
+            id=bead.id,
+            label=bead.id,
+            title=bead.title or bead.id,
+            status=bead.status,
+            priority=bead.priority,
+            group=bead.status.value,
+        ).model_dump())
+
+        # Dependency edges: beads that block this one
+        for dep in bead.dependencies:
+            if dep.type == "blocks" and dep.depends_on_id:
+                edges.append(BeadEdge(
+                    from_=dep.depends_on_id,
+                    to=bead.id,
+                    arrows="to",
+                ).model_dump(by_alias=True))
+
+    return {
+        "project": project_name,
+        "nodes": nodes,
+        "edges": edges,
+        "bead_count": len(nodes),
+    }
+
+
+# ── health check ───────────────────────────────────────────────────────
+
+
+@router.get("/hello")
+async def hello():
+    """Health check — confirm the plugin API is mounted."""
+    from importlib.metadata import version as pkg_version
+
+    try:
+        ver = pkg_version("hermes-beads")
+    except Exception:
+        ver = "2.0.0-alpha.1"
+
+    return {
+        "plugin": "hermes-beads",
+        "version": ver,
+        "status": "ok",
+    }
+
+
+# ── single bead detail (bd CLI fallback) ───────────────────────────────
+
+
+def _bd(*args: str) -> dict | list:
+    """Minimal bd CLI wrapper for single-bead lookups."""
     cmd = ["bd", "--json"] + list(args)
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=workdir,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"bd exited with code {result.returncode}")
     try:
@@ -39,126 +165,11 @@ def _bd(*args: str, cwd: str | None = None) -> dict | list:
         return {"raw": result.stdout.strip()}
 
 
-def _find_workspace() -> str | None:
-    """Walk up from cwd to find a Beads workspace (.beads/ directory)."""
-    current = Path.cwd()
-    for parent in [current] + list(current.parents):
-        if (parent / ".beads").is_dir():
-            return str(parent)
-    return None
-
-
-@router.get("/hello")
-async def hello():
-    """Health check — confirm the plugin API is mounted."""
-    return {
-        "plugin": "hermes-beads",
-        "version": "2.0.0-alpha.1",
-        "status": "ok",
-    }
-
-
-@router.get("/beads")
-async def list_beads():
-    """Return all beads in the current workspace."""
-    cwd = _find_workspace()
-    if not cwd:
-        raise HTTPException(status_code=404, detail="No Beads workspace found from current directory")
-
-    try:
-        data = _bd("ready", cwd=cwd)
-        return {"workspace": cwd, "beads": data if isinstance(data, list) else []}
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/beads/ready")
-async def list_ready_beads():
-    """Return only ready (unblocked) beads."""
-    cwd = _find_workspace()
-    if not cwd:
-        raise HTTPException(status_code=404, detail="No Beads workspace found from current directory")
-
-    try:
-        raw = _bd("ready", cwd=cwd)
-        if not isinstance(raw, list):
-            return {"workspace": cwd, "beads": [], "count": 0}
-        # Filter to only OPEN status beads (not blocked)
-        ready = [b for b in raw if isinstance(b, dict) and b.get("status") == "OPEN"]
-        return {"workspace": cwd, "beads": ready, "count": len(ready)}
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/beads/{bead_id}")
 async def show_bead(bead_id: str):
-    """Show detail for a single bead."""
-    cwd = _find_workspace()
-    if not cwd:
-        raise HTTPException(status_code=404, detail="No Beads workspace found from current directory")
-
+    """Show detail for a single bead via bd CLI."""
     try:
-        data = _bd("show", bead_id, cwd=cwd)
-        return {"workspace": cwd, "bead": data}
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/beads/graph")
-async def bead_graph():
-    """Return bead DAG data suitable for vis-network rendering.
-
-    Builds nodes (beads) and edges (dependency relationships)
-    from the Beads workspace.
-    """
-    cwd = _find_workspace()
-    if not cwd:
-        raise HTTPException(status_code=404, detail="No Beads workspace found from current directory")
-
-    try:
-        raw = _bd("ready", cwd=cwd)
-        if not isinstance(raw, list):
-            return {"workspace": cwd, "nodes": [], "edges": []}
-
-        nodes = []
-        edges = []
-        seen = set()
-
-        for bead in raw:
-            if not isinstance(bead, dict):
-                continue
-            bid = bead.get("id", "unknown")
-            if bid in seen:
-                continue
-            seen.add(bid)
-
-            status = bead.get("status", "OPEN")
-            title = bead.get("title", bid)
-            priority = bead.get("priority", "")
-
-            nodes.append({
-                "id": bid,
-                "label": bid,
-                "title": title,
-                "status": status,
-                "priority": priority,
-                "group": status.lower(),
-            })
-
-            # Dependency edges: blocked beads → their blockers
-            blocks = bead.get("blocks", [])
-            if isinstance(blocks, list):
-                for blocker in blocks:
-                    if isinstance(blocker, dict):
-                        blocker_id = blocker.get("id", "")
-                        if blocker_id:
-                            edges.append({"from": blocker_id, "to": bid, "arrows": "to"})
-
-        return {
-            "workspace": cwd,
-            "nodes": nodes,
-            "edges": edges,
-            "bead_count": len(nodes),
-        }
+        data = _bd("show", bead_id)
+        return {"bead_id": bead_id, "bead": data}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
