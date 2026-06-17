@@ -170,8 +170,9 @@ async def project_graph(project_name: str):
 
 @router.post("/api/projects/{project_name}/dispatch")
 async def dispatch_beads(project_name: str, body: DispatchRequest):
-    """Dispatch selected beads via ``hb bridge dispatch --apply``.
+    """Dispatch selected beads programmatically via the dispatch executor.
 
+    Uses ``hermes_beads.dispatch_executor`` directly — no subprocess to ``hb``.
     Runs in the project directory so bd auto-discovers the workspace.
     """
     project = _find_project(project_name)
@@ -183,32 +184,18 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
     for bid in body.bead_ids:
         _validate_bead_id(bid)
 
-    # Check if hb CLI is available before attempting dispatch
-    import shutil
-    if not shutil.which("hb"):
-        raise HTTPException(
-            status_code=503,
-            detail="hb CLI not found on PATH. Install hermes-beads to enable dispatch."
-        )
+    from hermes_beads.dispatch_executor import dispatch_bead, DispatchError
 
     results = []
     for bid in body.bead_ids:
         try:
-            cmd = ["hb", "bridge", "dispatch", "--apply", "--bead", bid]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=project.path,
-            )
-            success = result.returncode == 0
+            outcome = dispatch_bead(bid, project.path)
             results.append({
                 "bead_id": bid,
-                "success": success,
-                "output": (result.stdout + result.stderr).strip()[:500],
+                "success": outcome.get("success", False),
+                "output": outcome.get("output", ""),
             })
-        except Exception as exc:
+        except DispatchError as exc:
             results.append({
                 "bead_id": bid,
                 "success": False,
