@@ -2,7 +2,7 @@
 
 🐝 Visual task graph for [Beads](https://github.com/gastownhall/beads) issues — rendered as an interactive DAG inside the [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard.
 
-> **v2.0.0-alpha.1** — Standalone `hb` CLI is deprecated in favour of the dashboard plugin.
+> **v2.0.0-beta.1** — Standalone `hb` CLI is deprecated in favour of the dashboard plugin.
 > The `hermes_beads` Python package remains (it powers the plugin's data layer), but
 > `pip install hermes-beads` is no longer the primary install path.
 

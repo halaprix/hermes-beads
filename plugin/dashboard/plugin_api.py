@@ -10,12 +10,13 @@ Endpoints:
   GET  /api/projects/<name>/graph         — bead DAG data for vis-network
   POST /api/projects/<name>/dispatch      — dispatch selected beads
   POST /api/projects/<name>/gate/<id>     — resolve a blocking gate
-  GET  /beads/<id>                        — single bead detail
+  GET  /api/projects/<name>/beads/<id>    — single bead detail
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -57,6 +58,18 @@ def _cache_bust(prefix: str):
 
 
 # ── request models ────────────────────────────────────────────────────
+
+_BEAD_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
+
+def _validate_bead_id(bead_id: str) -> str:
+    """Validate bead ID against CLI-safe pattern; raise 400 on mismatch."""
+    if not _BEAD_ID_RE.match(bead_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid bead_id: '{bead_id}'. Must match {_BEAD_ID_RE.pattern}",
+        )
+    return bead_id
 
 
 class DispatchRequest(BaseModel):
@@ -166,6 +179,10 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
     if not body.bead_ids:
         raise HTTPException(status_code=400, detail="No bead_ids provided")
 
+    # Validate all bead IDs before dispatching any
+    for bid in body.bead_ids:
+        _validate_bead_id(bid)
+
     # Check if hb CLI is available before attempting dispatch
     import shutil
     if not shutil.which("hb"):
@@ -177,7 +194,6 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
     results = []
     for bid in body.bead_ids:
         try:
-            # Use hb CLI if available, fall back to bd update --claim
             cmd = ["hb", "bridge", "dispatch", "--apply", "--bead", bid]
             result = subprocess.run(
                 cmd,
@@ -201,7 +217,7 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
 
     dispatched = sum(1 for r in results if r["success"])
     if dispatched > 0:
-        _cache_bust("graph:")  # bust all graph caches on state change
+        _cache_bust(f"graph:{project_name}")  # bust only this project's graph cache
     return {
         "project": project_name,
         "dispatched": dispatched,
@@ -213,13 +229,26 @@ async def dispatch_beads(project_name: str, body: DispatchRequest):
 # ── gate resolver ─────────────────────────────────────────────────────
 
 
+def _bead_has_open_children(bead_data: dict) -> bool:
+    """Check if a bead has open child tasks."""
+    children = bead_data.get("children", [])
+    if not children:
+        return False
+    for child in children:
+        status = child.get("status", "")
+        if status in ("open", "in_progress"):
+            return True
+    return False
+
+
 @router.post("/api/projects/{project_name}/gate/{bead_id}")
 async def resolve_gate(project_name: str, bead_id: str, body: GateResolveRequest):
     """Mark a bead's blocking dependency as resolved.
 
     Closes the specified bead via bd close. If the bead has open
-    child tasks, adds a comment instead.
+    child tasks, returns an error instead of closing.
     """
+    _validate_bead_id(bead_id)
     project = _find_project(project_name)
 
     try:
@@ -229,9 +258,16 @@ async def resolve_gate(project_name: str, bead_id: str, body: GateResolveRequest
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"bd show failed: {e}")
 
+    if _bead_has_open_children(bead_data):
+        return {
+            "bead_id": bead_id,
+            "action": "blocked",
+            "message": f"Bead {bead_id} has open child tasks. Close children first.",
+        }
+
     try:
         _bd("close", bead_id, "-m", body.comment or "Resolved via dashboard", cwd=project.path)
-        _cache_bust("graph:")  # bust graph caches on state change
+        _cache_bust(f"graph:{project_name}")  # bust only this project's graph cache
         return {
             "bead_id": bead_id,
             "action": "closed",
@@ -252,7 +288,7 @@ async def hello():
     try:
         ver = pkg_version("hermes-beads")
     except Exception:
-        ver = "2.0.0-alpha.1"
+        ver = "2.0.0-beta.1"
 
     return {
         "plugin": "hermes-beads",
@@ -267,6 +303,7 @@ async def hello():
 @router.get("/api/projects/{project_name}/beads/{bead_id}")
 async def show_bead(project_name: str, bead_id: str):
     """Show detail for a single bead via bd CLI, scoped to a project."""
+    _validate_bead_id(bead_id)
     project = _find_project(project_name)
     try:
         data = _bd("show", bead_id, cwd=project.path)
