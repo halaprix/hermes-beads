@@ -80,3 +80,6 @@
 {"id":"int-699c1a6a","kind":"field_change","created_at":"2026-06-17T19:14:34.153227019Z","actor":"halaprix","issue_id":"hb-e3k","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-8101e144","kind":"field_change","created_at":"2026-06-17T19:14:34.731155367Z","actor":"halaprix","issue_id":"hb-5o6","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-66536a56","kind":"field_change","created_at":"2026-06-17T19:17:16.949059054Z","actor":"halaprix","issue_id":"hb-m24","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-4f741500","kind":"field_change","created_at":"2026-06-17T20:41:33.056368736Z","actor":"halaprix","issue_id":"hb-k8r","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-58c8b95a","kind":"field_change","created_at":"2026-06-17T20:41:33.652630005Z","actor":"halaprix","issue_id":"hb-lhk","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-d74604a4","kind":"field_change","created_at":"2026-06-17T20:41:34.266751946Z","actor":"halaprix","issue_id":"hb-pkr","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
