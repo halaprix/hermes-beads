@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Added `plugin/plugin.yaml` and documented `hermes plugins enable hermes-beads`
+  so the dashboard tab appears under Hermes versions that require explicit
+  opt-in for user plugins.
+- Added FastAPI and HTTPX test-client dependencies so plugin API tests pass in
+  a clean CI environment.
+- Installed and PATH-detected the Beads CLI in CI before tests that exercise
+  real `bd` calls.
+- Updated stale Beads sync documentation links that were breaking the docs gate.
+
+### Added
+
+- Documented the proposed standalone `hb serve` path for non-Hermes users.
+
 ## [2.0.0-beta.1] — 2026-06-17
 
 ### Fixed

@@ -12,7 +12,10 @@
 # Symlink into Hermes plugins
 ln -s $(pwd)/plugin ~/.hermes/plugins/hermes-beads
 
-# Restart the dashboard
+# Enable the user plugin. Hermes dashboard user plugins are opt-in.
+hermes plugins enable hermes-beads
+
+# Restart the dashboard so backend routes are mounted
 hermes dashboard --stop
 hermes dashboard --host 0.0.0.0 --insecure --no-open
 ```
@@ -21,15 +24,26 @@ The "Beads" tab appears in the dashboard sidebar. Navigate to it to see your
 bead dependency graph with neon glow styling, clickable nodes, dispatch
 buttons, status filters, and 30s auto-refresh.
 
-## Legacy CLI
+If you installed an older checkout before `plugin/plugin.yaml` existed and the
+tab does not appear, either re-sync the plugin directory and run the enable
+command above, or add `hermes-beads` to `plugins.enabled` in
+`~/.hermes/config.yaml` and restart the dashboard.
 
-The standalone `hb` CLI still works but is no longer the primary interface:
+## Standalone / non-Hermes use
+
+The `hb` CLI remains available for users who do not run Hermes:
 
 ```bash
 pip install -e .
 hb --version
 hb bridge dispatch --dry-run
 ```
+
+The visual DAG currently ships as a Hermes dashboard plugin. A standalone web
+viewer should reuse the same `hermes_beads` data layer and `plugin/dashboard`
+frontend bundle, but serve it from an `hb serve` command instead of the Hermes
+dashboard. See [`docs/standalone.md`](docs/standalone.md) for the proposed
+shape.
 
 ## API
 

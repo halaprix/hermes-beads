@@ -12,6 +12,9 @@ ln -s $(pwd)/plugin ~/.hermes/plugins/hermes-beads
 # Or copy it
 cp -r plugin ~/.hermes/plugins/hermes-beads
 
+# Enable the user plugin. Hermes dashboard user plugins are opt-in.
+hermes plugins enable hermes-beads
+
 # Restart the dashboard
 hermes dashboard --stop
 hermes dashboard --host 0.0.0.0 --insecure --no-open
@@ -21,6 +24,7 @@ hermes dashboard --host 0.0.0.0 --insecure --no-open
 
 ```
 plugin/dashboard/
+├── ../plugin.yaml       # Hermes plugin manifest for opt-in enablement
 ├── manifest.json      # Tab registration + metadata
 ├── plugin_api.py      # FastAPI backend routes
 └── dist/
