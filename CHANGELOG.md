@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **Graph showed only a fraction of the project.** `build_graph` and
+  `build_graph_raw` dropped every dependency whose type was not `blocks`,
+  which hides the whole epic structure — on a real 479-bead store that meant
+  119 of 453 relationships drawn, with all 274 `parent-child` edges missing.
+  All types are now rendered, each with its own colour and dash pattern, and
+  edges carry their `type` so a frontend can filter per type. Pass
+  `edge_types={"blocks"}` for the previous execution-constraint-only view.
+- **Phantom nodes from cross-project references.** A dependency pointing at a
+  bead outside the current project is now dropped instead of making
+  vis-network materialise a node for the unknown endpoint.
 - Added `plugin/plugin.yaml` and documented `hermes plugins enable hermes-beads`
   so the dashboard tab appears under Hermes versions that require explicit
   opt-in for user plugins.
@@ -15,6 +25,14 @@
 
 ### Added
 
+- **Dolt-backed workspaces are readable.** Current Beads stores issues in Dolt
+  and no longer writes `.beads/issues.jsonl` unless the workspace opts in to
+  `export.auto`, so the reader saw an empty project. It now falls back to
+  `bd -C <dir> export` when the file is absent, and discovery qualifies a
+  workspace on the `.beads/` directory rather than on `issues.jsonl`. An
+  existing `issues.jsonl` still takes precedence, so nothing gets slower.
+  Memories are never requested — plain `bd export` omits them, and they can
+  hold sensitive agent context.
 - Documented the proposed standalone `hb serve` path for non-Hermes users.
 
 ## [2.0.0-beta.1] — 2026-06-17
