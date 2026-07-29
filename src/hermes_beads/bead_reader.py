@@ -15,11 +15,17 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from hermes_beads.bead_model import Bead, BeadDependency, BeadProject, BeadStatus, BeadPriority
+
+# Upper bound for a single ``bd export`` call. Generous: a cold Dolt start on a
+# few-hundred-bead store is ~1s, and discovery may hit several projects.
+_BD_TIMEOUT_SECONDS = 30
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -166,35 +172,78 @@ def _parse_jsonl_line(line: str) -> Optional[Bead]:
     return bead
 
 
+def _read_jsonl_file(jsonl_path: Path) -> Optional[list[str]]:
+    """Return the lines of an on-disk JSONL export, or None if unreadable."""
+    if not jsonl_path.is_file():
+        return None
+    try:
+        return jsonl_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _read_via_bd(project_path: Path) -> Optional[list[str]]:
+    """Return JSONL lines by shelling out to ``bd export``, or None on failure.
+
+    Beads switched its storage to Dolt: ``.beads/issues.jsonl`` is no longer
+    written unless the workspace opts in via ``export.auto`` in
+    ``.beads/config.yaml``. ``bd -C <dir> export`` streams the same records to
+    stdout from any cwd, so a Dolt-only workspace stays readable.
+
+    Memories are deliberately not requested: plain ``bd export`` omits them,
+    and they can hold sensitive agent context that has no place in a graph.
+    """
+    if not (project_path / ".beads").is_dir():
+        return None
+    bd = shutil.which("bd") or shutil.which("beads")
+    if bd is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [bd, "-C", str(project_path), "export"],
+            capture_output=True,
+            text=True,
+            timeout=_BD_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.splitlines()
+
+
 def read_project_beads(project_path: str | Path) -> list[Bead]:
-    """Parse a .beads/issues.jsonl file into a list of Bead objects.
+    """Read a project's beads into a list of Bead objects.
+
+    Prefers ``.beads/issues.jsonl`` when present (no subprocess, fastest),
+    and otherwise falls back to the ``bd`` CLI so Dolt-backed workspaces —
+    the default since Beads moved off JSONL — are readable too.
 
     Args:
         project_path: Path to the project root (must contain .beads/ dir).
 
     Returns:
-        List of Bead objects. Empty list if file missing or unparseable.
+        List of Bead objects. Empty list if the project cannot be read.
     """
-    jsonl_path = Path(project_path) / ".beads" / "issues.jsonl"
-    if not jsonl_path.is_file():
+    project_path = Path(project_path)
+    lines = _read_jsonl_file(project_path / ".beads" / "issues.jsonl")
+    if lines is None:
+        lines = _read_via_bd(project_path)
+    if lines is None:
         return []
 
     beads: list[Bead] = []
     seen: set[str] = set()
 
-    try:
-        with open(jsonl_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                bead = _parse_jsonl_line(line)
-                if bead and bead.id not in seen:
-                    bead.project = str(Path(project_path).name)
-                    beads.append(bead)
-                    seen.add(bead.id)
-    except (OSError, UnicodeDecodeError):
-        pass
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        bead = _parse_jsonl_line(line)
+        if bead and bead.id not in seen:
+            bead.project = project_path.name
+            beads.append(bead)
+            seen.add(bead.id)
 
     return beads
 
@@ -221,11 +270,15 @@ def _register_project(
 
 
 def discover_projects(scan_roots: Optional[list[Path]] = None) -> list[BeadProject]:
-    """Scan for Beads projects (.beads/issues.jsonl files).
+    """Scan for Beads projects (directories containing ``.beads/``).
 
     Two scanning strategies:
     1. **Direct**: if a scan root itself contains ``.beads/``, register it.
     2. **Iterdir**: scan subdirectories of each root for ``.beads/``.
+
+    A workspace qualifies on the ``.beads/`` directory alone — requiring
+    ``issues.jsonl`` would skip every Dolt-backed workspace, which is the
+    default in current Beads.
 
     Args:
         scan_roots: Optional override list of directories to scan.  When
@@ -242,7 +295,7 @@ def discover_projects(scan_roots: Optional[list[Path]] = None) -> list[BeadProje
 
     for root in scan_roots:
         # Strategy 1: check if the root itself is a bead project
-        if (root / ".beads" / "issues.jsonl").is_file():
+        if (root / ".beads").is_dir():
             _register_project(projects, root)
 
         # Strategy 2: scan subdirectories
@@ -250,8 +303,7 @@ def discover_projects(scan_roots: Optional[list[Path]] = None) -> list[BeadProje
             for entry in root.iterdir():
                 if not entry.is_dir():
                     continue
-                jsonl = entry / ".beads" / "issues.jsonl"
-                if not jsonl.is_file():
+                if not (entry / ".beads").is_dir():
                     continue
                 _register_project(projects, entry)
         except PermissionError:

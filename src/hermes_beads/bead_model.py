@@ -98,6 +98,7 @@ class BeadEdge(BaseModel):
     from_: str = Field(alias="from")
     to: str
     arrows: str = "to"
+    dep_type: str = Field(default="blocks", alias="type")
 
     model_config = {"populate_by_name": True}
 

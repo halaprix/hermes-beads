@@ -6,6 +6,8 @@ the dashboard frontend expects for rendering interactive DAGs.
 """
 from __future__ import annotations
 
+from typing import Container, Optional
+
 from hermes_beads.bead_model import (
     Bead,
     BeadEdge,
@@ -95,32 +97,89 @@ def _node_for_bead(bead: Bead) -> dict:
     }
 
 
-def _edge_for_dep(bead: Bead, dep_id: str) -> dict:
+# ── dependency-type edge styling ──────────────────────────────────────
+#
+# Beads models several relationship kinds. "blocks" is the execution
+# constraint, but "parent-child" carries the epic structure and is usually
+# the most common type in a mature store — rendering only "blocks" hides
+# the shape of the project. Each type gets its own colour/dash so the graph
+# stays readable with all of them switched on.
+
+_EDGE_STYLES: dict[str, dict] = {
+    "blocks": {"color": "#ff6688", "dashes": False, "width": 1.6},
+    "parent-child": {"color": "#4a7fd4", "dashes": False, "width": 1.1},
+    "discovered-from": {"color": "#7a5cbf", "dashes": [4, 3], "width": 1.0},
+    "related": {"color": "#4a8f8f", "dashes": [2, 3], "width": 0.9},
+    "relates-to": {"color": "#4a8f8f", "dashes": [2, 3], "width": 0.9},
+    "supersedes": {"color": "#bf8f3c", "dashes": [6, 3], "width": 1.2},
+}
+_DEFAULT_EDGE_STYLE = {"color": "#444466", "dashes": False, "width": 1.0}
+
+
+def edge_style(dep_type: str) -> dict:
+    """Return the vis-network styling for a dependency type."""
+    return _EDGE_STYLES.get(dep_type, _DEFAULT_EDGE_STYLE)
+
+
+def _edge_for_dep(bead: Bead, dep_id: str, dep_type: str = "blocks") -> dict:
     """Build a vis-network edge dict from a dependency."""
+    style = edge_style(dep_type)
     return {
         "from": dep_id,
         "to": bead.id,
         "arrows": "to",
-        "color": {"color": "#444466", "highlight": "#8888aa"},
+        "type": dep_type,
+        "color": {"color": style["color"], "highlight": "#8888aa"},
+        "dashes": style["dashes"],
         "smooth": {"type": "curvedCW", "roundness": 0.2},
-        "width": 1,
+        "width": style["width"],
     }
 
 
-def build_graph(beads: list[Bead], project_name: str = "") -> BeadGraph:
+def _iter_edges(beads: list[Bead], edge_types: Optional[Container[str]]):
+    """Yield (dep_type, source_id, target_bead) for every dependency to draw.
+
+    Drops dependencies whose source is not itself in ``beads`` — vis-network
+    materialises a phantom node for an unknown edge endpoint, so a reference
+    to a bead outside this project would otherwise appear as a ghost.
+    Deduplicates on (source, target, type).
+    """
+    known = {b.id for b in beads}
+    seen: set[tuple[str, str, str]] = set()
+
+    for bead in beads:
+        for dep in bead.dependencies:
+            src = dep.depends_on_id
+            if not src or src not in known:
+                continue
+            if edge_types is not None and dep.type not in edge_types:
+                continue
+            key = (src, bead.id, dep.type)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield dep.type, src, bead
+
+
+def build_graph(
+    beads: list[Bead],
+    project_name: str = "",
+    edge_types: Optional[Container[str]] = None,
+) -> BeadGraph:
     """Build a full BeadGraph from a list of Bead objects.
 
     Args:
         beads: Parsed beads from bead_reader.read_project_beads().
         project_name: Optional project name for metadata.
+        edge_types: Optional allowlist of dependency types to render.
+            ``None`` (default) renders every type. Pass ``{"blocks"}`` for
+            the execution-constraint-only view.
 
     Returns:
         BeadGraph with nodes and edges in vis-network format.
     """
     nodes = []
-    edges = []
     seen_nodes: set[str] = set()
-    seen_edges: set[tuple[str, str]] = set()
 
     for bead in beads:
         if bead.id not in seen_nodes:
@@ -134,15 +193,15 @@ def build_graph(beads: list[Bead], project_name: str = "") -> BeadGraph:
             ))
             seen_nodes.add(bead.id)
 
-        for dep in bead.dependencies:
-            edge_key = (dep.depends_on_id, bead.id)
-            if dep.type == "blocks" and dep.depends_on_id and edge_key not in seen_edges:
-                edges.append(BeadEdge.model_validate({
-                    "from": dep.depends_on_id,
-                    "to": bead.id,
-                    "arrows": "to",
-                }))
-                seen_edges.add(edge_key)
+    edges = [
+        BeadEdge.model_validate({
+            "from": src,
+            "to": bead.id,
+            "arrows": "to",
+            "type": dep_type,
+        })
+        for dep_type, src, bead in _iter_edges(beads, edge_types)
+    ]
 
     return BeadGraph(
         project=project_name,
@@ -151,31 +210,38 @@ def build_graph(beads: list[Bead], project_name: str = "") -> BeadGraph:
     )
 
 
-def build_graph_raw(beads: list[Bead], project_name: str = "") -> dict:
+def build_graph_raw(
+    beads: list[Bead],
+    project_name: str = "",
+    edge_types: Optional[Container[str]] = None,
+) -> dict:
     """Like build_graph() but returns raw vis-network dicts (not Pydantic).
 
     This is the format the frontend expects: nodes have colour, shadow,
     size, and shape fields; edges have smooth curve config.
+
+    ``edge_types`` behaves as in :func:`build_graph`. ``edge_counts`` in the
+    result lets the frontend build per-type filter chips without a second
+    pass over the graph.
     """
     nodes = []
-    edges = []
     seen_nodes: set[str] = set()
-    seen_edges: set[tuple[str, str]] = set()
 
     for bead in beads:
         if bead.id not in seen_nodes:
             nodes.append(_node_for_bead(bead))
             seen_nodes.add(bead.id)
 
-        for dep in bead.dependencies:
-            edge_key = (dep.depends_on_id, bead.id)
-            if dep.type == "blocks" and dep.depends_on_id and edge_key not in seen_edges:
-                edges.append(_edge_for_dep(bead, dep.depends_on_id))
-                seen_edges.add(edge_key)
+    edges = []
+    edge_counts: dict[str, int] = {}
+    for dep_type, src, bead in _iter_edges(beads, edge_types):
+        edges.append(_edge_for_dep(bead, src, dep_type))
+        edge_counts[dep_type] = edge_counts.get(dep_type, 0) + 1
 
     return {
         "project": project_name,
         "nodes": nodes,
         "edges": edges,
         "bead_count": len(nodes),
+        "edge_counts": edge_counts,
     }
